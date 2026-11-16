@@ -31,6 +31,7 @@ import {
   Panel,
   useStore,
   useReactFlow,
+  useNodesState,
 } from '@xyflow/react'
 import Markdown from 'react-markdown'
 import gfm from 'remark-gfm'
@@ -304,7 +305,7 @@ function CanvasTools({ focusCurrent, edgeStyle, onEdgeStyle, onArrange }) {
   )
 }
 
-// Keep transient drag positions inside the canvas; commit only on pointer release.
+// React Flow owns live positions and measurements. Persist coordinates on pointer release.
 function Canvas({
   nodes,
   edges,
@@ -318,12 +319,21 @@ function Canvas({
   onEdgeStyle,
   onArrange,
 }) {
-  const [drag, setDrag] = useState(null)
-  const display = React.useMemo(
-    () =>
-      drag ? nodes.map((n) => (n.id === drag.id ? { ...n, position: drag.position } : n)) : nodes,
-    [nodes, drag],
-  )
+  const [display, setDisplay, onNodesChange] = useNodesState(nodes)
+  useEffect(() => {
+    setDisplay((current) => {
+      const previous = new Map(current.map((node) => [node.id, node]))
+      // Retain measured dimensions and active dragging across external data/layout updates.
+      return nodes.map((node) => {
+        const retained = previous.get(node.id)
+        return {
+          ...retained,
+          ...node,
+          position: retained?.dragging ? retained.position : node.position,
+        }
+      })
+    })
+  }, [nodes, setDisplay])
   return (
     <ReactFlow
       proOptions={{ hideAttribution: true }}
@@ -334,11 +344,8 @@ function Canvas({
       onInit={onInit}
       onMoveEnd={(_, v) => onView(v)}
       onPaneClick={onBlank}
-      onNodeDrag={(_, n) => setDrag({ id: n.id, position: n.position })}
-      onNodeDragStop={(_, n) => {
-        setDrag(null)
-        onDropNode(n)
-      }}
+      onNodesChange={onNodesChange}
+      onNodeDragStop={(_, node) => onDropNode(node)}
       nodesConnectable={false}
       minZoom={0.28}
       maxZoom={1.65}
