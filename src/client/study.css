@@ -584,6 +584,26 @@
   border-left: 1px solid var(--st-line);
   margin: 0 4px;
 }
+.st-canvas-tools select {
+  height: 28px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--st-pane);
+  color: var(--st-ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.st-canvas-tools .st-layout-action {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.st-canvas-tools select:focus-visible {
+  outline: 2px solid var(--st-path);
+}
 .st-start h2 {
   text-align: center;
   margin-bottom: 22px;

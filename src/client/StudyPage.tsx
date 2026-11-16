@@ -20,6 +20,7 @@ import {
   ArrowUp,
   Ellipsis,
   GripHorizontal,
+  Network,
   ArrowUpRight,
 } from 'lucide-react'
 import {
@@ -31,7 +32,6 @@ import {
   useStore,
   useReactFlow,
 } from '@xyflow/react'
-import dagre from '@dagrejs/dagre'
 import Markdown from 'react-markdown'
 import gfm from 'remark-gfm'
 import math from 'remark-math'
@@ -40,6 +40,7 @@ import { pathTo, type Anchor, type Turn } from './tree'
 import { locate, selectionAt } from './selection'
 import { Study } from './study'
 import { NativeBoundary } from './NativeFrame'
+import { arrange, extendDown, makeRoom, sizeOf, LAYOUT_VERSION, type Sizes } from './layout'
 
 const UI = createContext<any>(null)
 const states = {
@@ -136,17 +137,31 @@ function Card({ data }) {
     const cut = preview.indexOf('\n\n', 600)
     return cut > 0 ? preview.slice(0, cut) : preview
   }, [expanded, text])
+  const card = useRef<HTMLElement>(null)
   const body = useRef(null),
     [long, setLong] = useState(false)
+  useLayoutEffect(() => {
+    if (overview || !card.current) return
+    const observer = new ResizeObserver(([entry]) => {
+      const size = entry.borderBoxSize?.[0]
+      ui.measure(n.id, {
+        width: size?.inlineSize || card.current.offsetWidth,
+        height: size?.blockSize || card.current.offsetHeight,
+      })
+    })
+    observer.observe(card.current)
+    return () => observer.disconnect()
+  }, [n.id, overview, ui.measure])
   useLayoutEffect(() => {
     if (body.current) setLong(excerpt !== text || body.current.scrollHeight > 118)
   }, [text, excerpt, overview, expanded])
   return (
     <article
+      ref={card}
       className={'st-card ' + (active ? 'active ' : '') + (ui.pathIds.has(n.id) ? 'onpath' : '')}
       onClick={() => ui.pick(n)}
     >
-      <Handle type="target" position={Position.Left} />
+      <Handle type="target" position={Position.Top} />
       <header className="st-grip">
         <span>
           {n.parentId ? <CornerDownRight size={13} /> : <GitBranch size={13} />}{' '}
@@ -201,7 +216,7 @@ function Card({ data }) {
           {active && <Composer key={n.id} id={n.id} />}
         </>
       )}
-      <Handle type="source" position={Position.Right} />
+      <Handle type="source" position={Position.Bottom} />
     </article>
   )
 }
@@ -212,6 +227,8 @@ const emptyPrefs = () => ({
   drafts: {},
   expanded: {},
   positions: {},
+  layoutVersions: {},
+  edgeStyle: 'curve',
   views: {},
   reader: true,
   width: 480,
@@ -221,6 +238,7 @@ const key = 'dsh-study-tree:view:v1'
 function readPrefs() {
   try {
     const saved = { ...emptyPrefs(), ...JSON.parse(localStorage.getItem(key) || '{}') }
+    if (saved.edgeStyle === 'straight') saved.edgeStyle = 'rounded-step'
     if (!saved.nativeFrameVersion) {
       saved.width = Math.max(480, saved.width)
       saved.nativeFrameVersion = 1
@@ -238,40 +256,7 @@ function readPrefs() {
     return emptyPrefs()
   }
 }
-function initialPositions(turns, stored) {
-  if (turns.every((n) => stored[n.id])) return stored
-  if (turns.length > 1 && !Object.keys(stored).length) {
-    const g = new dagre.graphlib.Graph()
-      .setGraph({ rankdir: 'LR', ranksep: 70, nodesep: 60 })
-      .setDefaultEdgeLabel(() => ({}))
-    for (const n of turns) g.setNode(n.id, { width: 340, height: 430 })
-    for (const n of turns) if (n.parentId) g.setEdge(n.parentId, n.id)
-    dagre.layout(g)
-    const origin = g.node((turns.find((n) => !n.parentId) || turns[0]).id)
-    return Object.fromEntries(
-      turns.map((n) => {
-        const point = g.node(n.id)
-        return [n.id, { x: point.x - origin.x, y: point.y - origin.y }]
-      }),
-    )
-  }
-  const positions = { ...stored }
-  for (const n of turns) {
-    if (positions[n.id]) continue
-    const parent = positions[n.parentId]
-    const next = parent ? { x: parent.x + 410, y: parent.y } : { x: 0, y: 0 }
-    while (
-      Object.values(positions).some(
-        (q: any) => Math.abs(q.x - next.x) < 325 && Math.abs(q.y - next.y) < 475,
-      )
-    )
-      next.y += 490
-    positions[n.id] = next
-  }
-  return positions
-}
-
-function CanvasTools({ focusCurrent }) {
+function CanvasTools({ focusCurrent, edgeStyle, onEdgeStyle, onArrange }) {
   const flow = useReactFlow()
   const zoom = useStore((s) => Math.round(s.transform[2] * 100))
   return (
@@ -284,6 +269,25 @@ function CanvasTools({ focusCurrent }) {
       </button>
       <button aria-label="放大" onClick={() => flow.zoomIn({ duration: 120 })}>
         <Plus size={15} />
+      </button>
+      <i />
+      <select
+        aria-label="连线方式"
+        title="连线方式"
+        value={edgeStyle}
+        onChange={(event) => onEdgeStyle(event.target.value)}
+      >
+        <option value="curve">曲线</option>
+        <option value="rounded-step">圆角折线</option>
+      </select>
+      <button
+        className="st-layout-action"
+        aria-label="自动布局"
+        title="自动布局"
+        onClick={onArrange}
+      >
+        <Network size={15} />
+        <span>自动布局</span>
       </button>
       <i />
       <button aria-label="定位当前节点" title="定位当前节点" onClick={focusCurrent}>
@@ -301,7 +305,19 @@ function CanvasTools({ focusCurrent }) {
 }
 
 // Keep transient drag positions inside the canvas; commit only on pointer release.
-function Canvas({ nodes, edges, onDropNode, onInit, view, onView, onBlank, focusCurrent }) {
+function Canvas({
+  nodes,
+  edges,
+  onDropNode,
+  onInit,
+  view,
+  onView,
+  onBlank,
+  focusCurrent,
+  edgeStyle,
+  onEdgeStyle,
+  onArrange,
+}) {
   const [drag, setDrag] = useState(null)
   const display = React.useMemo(
     () =>
@@ -329,7 +345,12 @@ function Canvas({ nodes, edges, onDropNode, onInit, view, onView, onBlank, focus
       deleteKeyCode={null}
     >
       <Background gap={24} size={1} color="var(--dsw-alias-border-l3)" />
-      <CanvasTools focusCurrent={focusCurrent} />
+      <CanvasTools
+        focusCurrent={focusCurrent}
+        edgeStyle={edgeStyle}
+        onEdgeStyle={onEdgeStyle}
+        onArrange={onArrange}
+      />
     </ReactFlow>
   )
 }
@@ -401,10 +422,51 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
       study.hideReader = null
     }
   }, [study])
+  const sizes = useRef<Sizes>({})
+  const layoutInput = useRef({ treeId, turns })
+  layoutInput.current = { treeId, turns }
+  const measure = React.useCallback((id, size) => {
+    const previous = sizeOf(id, sizes.current)
+    sizes.current[id] = size
+    if (size.height <= previous.height + 1) return
+    setPrefs((current) => {
+      const { treeId, turns } = layoutInput.current
+      const stored = current.positions[treeId]
+      if (!stored || current.layoutVersions[treeId] !== LAYOUT_VERSION) return current
+      const positions = makeRoom(turns, stored, sizes.current, id)
+      return positions === stored
+        ? current
+        : {
+            ...current,
+            positions: { ...current.positions, [treeId]: positions },
+          }
+    })
+  }, [])
   const positions = React.useMemo(
-    () => initialPositions(turns, prefs.positions[treeId] || {}),
-    [treeId, turns.map((n) => n.id).join(), prefs.positions],
+    () =>
+      prefs.layoutVersions[treeId] === LAYOUT_VERSION
+        ? extendDown(turns, prefs.positions[treeId] || {}, sizes.current)
+        : arrange(turns, sizes.current),
+    [treeId, turns.map((node) => node.id).join(), prefs.positions, prefs.layoutVersions],
   )
+  const migrating = prefs.layoutVersions[treeId] !== LAYOUT_VERSION
+  const initialView = migrating
+    ? { x: 40 - (positions[active]?.x || 0), y: 52 - (positions[active]?.y || 0), zoom: 1 }
+    : prefs.views[treeId] || { x: 40, y: 52, zoom: 1 }
+  function autoArrange() {
+    if (!treeId || !turns.length) return
+    const positions = arrange(turns, sizes.current)
+    setPrefs((current) => ({
+      ...current,
+      layoutVersions: { ...current.layoutVersions, [treeId]: LAYOUT_VERSION },
+      positions: { ...current.positions, [treeId]: positions },
+    }))
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        flow.current?.fitView({ padding: 0.15, maxZoom: 1, duration: 180 })
+      }),
+    )
+  }
   useEffect(() => {
     study.listeners.add(redraw)
     const refresh = () => study.refresh().catch((e) => setError(e.message))
@@ -452,15 +514,22 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
   }, [study, turns, path])
   useEffect(() => () => study.observe([], []), [study])
   useEffect(() => {
-    if (treeId && turns.some((n) => !prefs.positions[treeId]?.[n.id]))
-      field('positions', treeId, positions)
-  }, [treeId, turns.length])
+    if (!treeId || !turns.length) return
+    if (migrating || turns.some((node) => !prefs.positions[treeId]?.[node.id])) {
+      setPrefs((current) => ({
+        ...current,
+        positions: { ...current.positions, [treeId]: positions },
+        layoutVersions: { ...current.layoutVersions, [treeId]: LAYOUT_VERSION },
+        views: migrating ? { ...current.views, [treeId]: initialView } : current.views,
+      }))
+    }
+  }, [treeId, turns.length, migrating])
   useEffect(() => {
     const id = pendingFocus.current
     if (!id || !positions[id] || !flow.current) return
     pendingFocus.current = null
     const { x, y } = positions[id]
-    flow.current.setCenter(x + 160, y + 150, {
+    flow.current.setCenter(x + 170, y + 150, {
       zoom: Math.max(0.92, flow.current.getZoom()),
       duration: 160,
     })
@@ -491,7 +560,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
       pendingFocus.current = n.id
       return
     }
-    if (p) flow.current?.setCenter(p.x + 160, p.y + 150, { zoom: 1, duration: 160 })
+    if (p) flow.current?.setCenter(p.x + 170, p.y + 150, { zoom: 1, duration: 160 })
   }
   function back(n) {
     const parent = byId.get(n.parentId)
@@ -573,10 +642,11 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
           id: n.id,
           source: n.parentId,
           target: n.id,
-          type: 'smoothstep',
+          type: prefs.edgeStyle === 'rounded-step' ? 'smoothstep' : 'default',
+          pathOptions: { borderRadius: 12, offset: 24 },
           style: { stroke: pathIds.has(n.id) ? 'var(--st-path)' : 'var(--st-line)' },
         })),
-    [turns, pathIds],
+    [turns, pathIds, prefs.edgeStyle],
   )
   function download(all) {
     const sorted = []
@@ -619,6 +689,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
         active,
         pathIds,
         busy,
+        measure,
         submit,
         pick,
         focus,
@@ -767,8 +838,11 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
               onInit={(i) => {
                 flow.current = i
               }}
-              view={prefs.views[treeId] || { x: 40, y: 52, zoom: 1 }}
+              view={initialView}
               onView={(v) => field('views', treeId, v)}
+              edgeStyle={prefs.edgeStyle}
+              onEdgeStyle={(edgeStyle) => patch({ edgeStyle })}
+              onArrange={autoArrange}
               focusCurrent={() => {
                 const n = byId.get(active)
                 if (n) focus(n)
