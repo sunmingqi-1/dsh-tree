@@ -5,6 +5,8 @@ export class Study {
   issues = new Map<string, string>()
   listeners = new Set<() => void>()
   watches = new Map<string, () => void>()
+  private historyQueue: Turn[] = []
+  private reading = new Set<string>()
   closing = false
   loaded = false
   error = ''
@@ -17,9 +19,21 @@ export class Study {
     if (!r.ok) throw new Error(r.error.message)
     return r.value
   }
-  async refresh() {
+  refreshing: Promise<void> | null = null
+  refresh() {
+    if (!this.refreshing)
+      this.refreshing = this.load().finally(() => {
+        this.refreshing = null
+      })
+    return this.refreshing
+  }
+  private async load() {
     const [rows] = await Promise.all([this.call('list'), this.ctx.sessions.refresh()])
-    for (const row of rows) this.merge(row)
+    const revisions = new Map(this.nodes.map((n) => [n.id, n]))
+    for (const row of rows) {
+      if ((revisions.get(row.id)?.revision ?? -1) < row.revision) revisions.set(row.id, row)
+    }
+    this.nodes = Array.from(revisions.values())
     this.issues.clear()
     this.loaded = true
     this.error = ''
@@ -91,9 +105,10 @@ export class Study {
     } catch (e) {
       if (!sending) handle?.abandon()
       const latest = this.nodes.find((item) => item.id === id) || n
-      const createdSession = e.rpcError?.code === 'session/workspace-attach-failed'
-        ? e.rpcError.details?.sessionId
-        : undefined
+      const createdSession =
+        e.rpcError?.code === 'session/workspace-attach-failed'
+          ? e.rpcError.details?.sessionId
+          : undefined
       if (latest.endSeq === null)
         await this.save({
           ...latest,
@@ -102,6 +117,28 @@ export class Study {
           error: String(e.message || e),
         })
       throw e
+    }
+  }
+  observe(turns: Turn[], path: Turn[]) {
+    const wanted = new Set(turns.map((n) => n.id))
+    this.historyQueue = []
+    for (const id of this.reading) if (!wanted.has(id)) this.watches.get(id)?.()
+    const ordered = new Map(
+      [...path]
+        .reverse()
+        .concat(turns)
+        .map((n) => [n.id, n]),
+    )
+    for (const n of ordered.values()) {
+      if (!n.sessionId || !n.requestId || this.issues.has(n.id) || this.watches.has(n.id)) continue
+      if (n.endSeq === null) this.watch(n)
+      else if (!this.answers.has(n.id)) this.historyQueue.push(n)
+    }
+    this.drain()
+  }
+  private drain() {
+    while (!this.closing && this.reading.size < 3 && this.historyQueue.length) {
+      this.watch(this.historyQueue.shift()!)
     }
   }
   watch(n: Turn) {
@@ -122,14 +159,18 @@ export class Study {
       this.emit()
       return
     }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    if (n.endSeq !== null) this.reading.add(n.id)
     let off = () => {},
       stopped = false
     const stop = () => {
       if (stopped) return
       stopped = true
+      clearTimeout(timer)
       off()
       ref.release()
       this.watches.delete(n.id)
+      if (this.reading.delete(n.id)) queueMicrotask(() => this.drain())
     }
     this.watches.set(n.id, stop)
     const fail = (e) => {
@@ -147,6 +188,11 @@ export class Study {
         const read = () => {
           if (stopped || finishing) return
           const result = readTurn(binding.eventSource.getSnapshot().entries, n.requestId)
+          if (n.endSeq !== null && result.endSeq === null) {
+            fail(new Error('未能读取此节点的完整问答，请刷新后重试'))
+            return
+          }
+          if (this.answers.get(n.id) === result.answer && result.endSeq === null) return
           this.answers.set(n.id, result.answer)
           this.issues.delete(n.id)
           if (result.endSeq !== null) {
@@ -163,7 +209,12 @@ export class Study {
                 ...n,
                 endSeq: result.endSeq,
                 status,
-                error: status === 'failed' ? result.reason.message || '本轮生成失败' : null,
+                error:
+                  status === 'failed'
+                    ? result.reason.error?.message ||
+                      result.reason.message ||
+                      '本轮生成未完成（' + result.reason.kind + '）'
+                    : null,
               }).then(stop, async (e) => {
                 stop()
                 try {
@@ -175,7 +226,14 @@ export class Study {
           }
           this.emit()
         }
-        off = binding.eventSource.subscribe(read)
+        // Coalesce stream tokens before folding history and parsing Markdown.
+        off = binding.eventSource.subscribe(() => {
+          if (timer !== undefined || stopped || finishing) return
+          timer = setTimeout(() => {
+            timer = undefined
+            read()
+          }, 100)
+        })
         read()
       })
       .catch(fail)

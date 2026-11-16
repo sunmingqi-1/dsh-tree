@@ -7,7 +7,32 @@ import React, {
   useRef,
   useState,
 } from 'react'
-import { ReactFlow, Handle, Position, Background, Controls, useViewport } from '@xyflow/react'
+import { createPortal } from 'react-dom'
+import {
+  GitBranch,
+  CornerDownRight,
+  BookOpen,
+  PanelRightOpen,
+  PanelRightClose,
+  Plus,
+  Minus,
+  Scan,
+  LocateFixed,
+  ArrowUp,
+  Ellipsis,
+  GripHorizontal,
+  ListTree,
+  ArrowUpRight,
+} from 'lucide-react'
+import {
+  ReactFlow,
+  Handle,
+  Position,
+  Background,
+  Panel,
+  useStore,
+  useReactFlow,
+} from '@xyflow/react'
 import dagre from '@dagrejs/dagre'
 import Markdown from 'react-markdown'
 import gfm from 'remark-gfm'
@@ -23,9 +48,9 @@ const states = {
   sending: '等待回答',
   failed: '生成失败',
   stopped: '已停止',
-  complete: '已完成',
+  complete: '正在读取回答…',
 }
-function Body({ n, text }: { n: Turn; text: string }) {
+const Body = React.memo(function Body({ n, text }: { n: Turn; text: string }) {
   return (
     <div className="st-md nodrag nopan nowheel" data-answer={n.id}>
       <Markdown
@@ -37,10 +62,10 @@ function Body({ n, text }: { n: Turn; text: string }) {
       </Markdown>
     </div>
   )
-}
+})
 function Composer({ id, root = false }) {
   const ui = useContext(UI)
-  const draft = ui.prefs.drafts[id] || ''
+  const [draft, setDraft] = useState(() => ui.draft(id))
   const send = () => ui.submit(root ? null : ui.byId.get(id), draft, null)
   return (
     <form
@@ -54,7 +79,10 @@ function Composer({ id, root = false }) {
         aria-label={root ? '学习主题' : '继续追问'}
         placeholder={root ? '你想学习什么？' : '从这里继续追问…'}
         value={draft}
-        onChange={(e) => ui.setDraft(id, e.target.value)}
+        onChange={(e) => {
+          setDraft(e.target.value)
+          ui.saveDraft(id, e.target.value)
+        }}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
             e.preventDefault()
@@ -72,25 +100,30 @@ function Composer({ id, root = false }) {
             aria-label="引用本轮回答"
             title="引用本轮回答"
             onClick={(e) => {
-              const card = e.currentTarget.closest('.st-card'),
-                body = card?.querySelector('[data-answer]')
-              if (!body?.textContent || ui.byId.get(id)?.endSeq == null) return
-              const r = new Range()
-              r.selectNodeContents(body)
-              const s = getSelection()
-              s?.removeAllRanges()
-              s?.addRange(r)
-              body.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+              const card = e.currentTarget.closest('.st-card')
+              ui.expand(id, true)
+              requestAnimationFrame(() => {
+                const body = card?.querySelector('[data-answer]')
+                if (!body?.textContent || ui.byId.get(id)?.endSeq == null) return
+                const r = new Range()
+                r.selectNodeContents(body)
+                const s = getSelection()
+                s?.removeAllRanges()
+                s?.addRange(r)
+                body.dispatchEvent(
+                  new MouseEvent('contextmenu', { bubbles: true, cancelable: true }),
+                )
+              })
             }}
           >
-            ＋
+            <Plus size={17} />
           </button>
         )}
         <button
           aria-label="发送问题"
           disabled={!draft.trim() || ui.busy || (!root && ui.byId.get(id)?.endSeq == null)}
         >
-          ↑
+          <ArrowUp size={16} />
         </button>
       </div>
     </form>
@@ -99,15 +132,22 @@ function Composer({ id, root = false }) {
 function Card({ data }) {
   const ui = useContext(UI),
     n: Turn = data.turn
-  const overview = useViewport().zoom < 0.55
+  const overview = useStore((s) => s.transform[2] < 0.6)
   const active = n.id === ui.active
   const text = ui.study.answers.get(n.id) || ''
   const expanded = !!ui.prefs.expanded[n.id]
+  const excerpt = React.useMemo(() => {
+    if (expanded || text.length < 1600) return text
+    // Keep the first Markdown blocks intact. The expanded card and reader use the source text.
+    const preview = text.slice(0, 1600)
+    const cut = preview.indexOf('\n\n', 600)
+    return cut > 0 ? preview.slice(0, cut) : preview
+  }, [expanded, text])
   const body = useRef(null),
     [long, setLong] = useState(false)
   useLayoutEffect(() => {
-    if (body.current) setLong(body.current.scrollHeight > 118)
-  }, [text, overview, expanded])
+    if (body.current) setLong(excerpt !== text || body.current.scrollHeight > 118)
+  }, [text, excerpt, overview, expanded])
   return (
     <article
       className={'st-card ' + (active ? 'active ' : '') + (ui.pathIds.has(n.id) ? 'onpath' : '')}
@@ -115,8 +155,11 @@ function Card({ data }) {
     >
       <Handle type="target" position={Position.Left} />
       <header className="st-grip">
-        <span>{n.parentId ? (n.anchor ? '引用追问' : '追问') : '学习起点'}</span>
-        <span>⠿</span>
+        <span>
+          {n.parentId ? <CornerDownRight size={13} /> : <GitBranch size={13} />}{' '}
+          {n.parentId ? (n.anchor ? '引用追问' : '追问') : '学习起点'}
+        </span>
+        <GripHorizontal size={15} aria-hidden />
       </header>
       <h3 className="nodrag">{n.question}</h3>
       {!overview && (
@@ -133,7 +176,17 @@ function Card({ data }) {
             </button>
           )}
           <div ref={body} className={'st-body ' + (expanded ? 'expanded' : '')}>
-            <Body n={n} text={text || n.error || ui.study.issues.get(n.id) || states[n.status]} />
+            <Body
+              n={n}
+              text={
+                excerpt ||
+                n.error ||
+                ui.study.issues.get(n.id) ||
+                (ui.study.answers.has(n.id) && n.status === 'complete'
+                  ? '本轮没有文本回复'
+                  : states[n.status])
+              }
+            />
           </div>
           {text && long && (
             <button className="st-fold nodrag" onClick={() => ui.expand(n.id, !expanded)}>
@@ -152,7 +205,7 @@ function Card({ data }) {
             </button>
           )}
           {n.error && text && <small>{n.error}</small>}
-          {active && <Composer id={n.id} />}
+          {active && <Composer key={n.id} id={n.id} />}
         </>
       )}
       <Handle type="source" position={Position.Right} />
@@ -174,24 +227,42 @@ const emptyPrefs = () => ({
 const key = 'dsh-study-tree:view:v1'
 function readPrefs() {
   try {
-    return { ...emptyPrefs(), ...JSON.parse(localStorage.getItem(key) || '{}') }
+    const saved = { ...emptyPrefs(), ...JSON.parse(localStorage.getItem(key) || '{}') }
+    if (!saved.canvasVersion) {
+      for (const [tree, view] of Object.entries(saved.views)) {
+        if (view.zoom >= 0.6) continue
+        const p = saved.positions[tree]?.[saved.selected[tree] || tree] || { x: 0, y: 0 }
+        saved.views[tree] = { x: 40 - p.x, y: 52 - p.y, zoom: 1 }
+      }
+      saved.canvasVersion = 2
+    }
+    return saved
   } catch {
     return emptyPrefs()
   }
 }
 function initialPositions(turns, stored) {
-  const g = new dagre.graphlib.Graph()
-    .setGraph({ rankdir: 'LR', ranksep: 88, nodesep: 84 })
-    .setDefaultEdgeLabel(() => ({}))
-  for (const n of turns) g.setNode(n.id, { width: 320, height: 475 })
-  for (const n of turns) if (n.parentId) g.setEdge(n.parentId, n.id)
-  dagre.layout(g)
+  if (turns.every((n) => stored[n.id])) return stored
+  if (turns.length > 1 && !Object.keys(stored).length) {
+    const g = new dagre.graphlib.Graph()
+      .setGraph({ rankdir: 'LR', ranksep: 70, nodesep: 60 })
+      .setDefaultEdgeLabel(() => ({}))
+    for (const n of turns) g.setNode(n.id, { width: 340, height: 430 })
+    for (const n of turns) if (n.parentId) g.setEdge(n.parentId, n.id)
+    dagre.layout(g)
+    const origin = g.node((turns.find((n) => !n.parentId) || turns[0]).id)
+    return Object.fromEntries(
+      turns.map((n) => {
+        const point = g.node(n.id)
+        return [n.id, { x: point.x - origin.x, y: point.y - origin.y }]
+      }),
+    )
+  }
   const positions = { ...stored }
   for (const n of turns) {
     if (positions[n.id]) continue
-    const parent = positions[n.parentId],
-      p = g.node(n.id)
-    const next = parent ? { x: parent.x + 410, y: parent.y } : { x: p.x - 160, y: 0 }
+    const parent = positions[n.parentId]
+    const next = parent ? { x: parent.x + 410, y: parent.y } : { x: 0, y: 0 }
     while (
       Object.values(positions).some(
         (q: any) => Math.abs(q.x - next.x) < 325 && Math.abs(q.y - next.y) < 475,
@@ -203,11 +274,82 @@ function initialPositions(turns, stored) {
   return positions
 }
 
-export function StudyPage({ study }: { study: Study }) {
+function CanvasTools({ focusCurrent }) {
+  const flow = useReactFlow()
+  const zoom = useStore((s) => Math.round(s.transform[2] * 100))
+  return (
+    <Panel position="bottom-center" className="st-canvas-tools">
+      <button aria-label="缩小" onClick={() => flow.zoomOut({ duration: 120 })}>
+        <Minus size={15} />
+      </button>
+      <button title="恢复 100% 缩放" onClick={() => flow.zoomTo(1, { duration: 120 })}>
+        {zoom}%
+      </button>
+      <button aria-label="放大" onClick={() => flow.zoomIn({ duration: 120 })}>
+        <Plus size={15} />
+      </button>
+      <i />
+      <button aria-label="定位当前节点" title="定位当前节点" onClick={focusCurrent}>
+        <LocateFixed size={16} />
+      </button>
+      <button
+        aria-label="查看整棵树"
+        title="查看整棵树"
+        onClick={() => flow.fitView({ padding: 0.12, maxZoom: 1, duration: 180 })}
+      >
+        <Scan size={16} />
+      </button>
+    </Panel>
+  )
+}
+
+// Keep transient drag positions inside the canvas; commit only on pointer release.
+function Canvas({ nodes, edges, onDropNode, onInit, view, onView, onBlank, focusCurrent }) {
+  const [drag, setDrag] = useState(null)
+  const display = React.useMemo(
+    () =>
+      drag ? nodes.map((n) => (n.id === drag.id ? { ...n, position: drag.position } : n)) : nodes,
+    [nodes, drag],
+  )
+  return (
+    <ReactFlow
+      nodes={display}
+      edges={edges}
+      nodeTypes={nodeTypes}
+      defaultViewport={view}
+      onInit={onInit}
+      onMoveEnd={(_, v) => onView(v)}
+      onPaneClick={onBlank}
+      onNodeDrag={(_, n) => setDrag({ id: n.id, position: n.position })}
+      onNodeDragStop={(_, n) => {
+        setDrag(null)
+        onDropNode(n)
+      }}
+      nodesConnectable={false}
+      minZoom={0.28}
+      maxZoom={1.65}
+      deleteKeyCode={null}
+    >
+      <Background gap={24} size={1} />
+      <CanvasTools focusCurrent={focusCurrent} />
+    </ReactFlow>
+  )
+}
+
+export function StudyPage({
+  study,
+  sidebar,
+  sidebarWide,
+  openSidebar,
+}: {
+  study: Study
+  sidebar: HTMLElement | null
+  sidebarWide: boolean
+  openSidebar: () => void
+}) {
   const [, redraw] = useReducer((v) => v + 1, 0),
     [prefs, setPrefs] = useState(readPrefs)
-  const [newTree, setNewTree] = useState(false),
-    [library, setLibrary] = useState(false)
+  const [newTree, setNewTree] = useState(false)
   const [selection, setSelection] = useState(null),
     [question, setQuestion] = useState('')
   const [error, setError] = useState(''),
@@ -218,13 +360,16 @@ export function StudyPage({ study }: { study: Study }) {
     root = useRef(null),
     reader = useRef(null)
   const pendingFocus = useRef<string | null>(null)
-  const roots = study.nodes.filter((n) => !n.parentId)
-  const treeId = newTree ? null : prefs.tree || roots[0]?.id
-  const turns = study.nodes.filter((n) => n.treeId === treeId),
+  const roots = React.useMemo(() => study.nodes.filter((n) => !n.parentId), [study.nodes])
+  const treeId = newTree ? null : roots.find((n) => n.id === prefs.tree)?.id || roots[0]?.id
+  const turns = React.useMemo(
+      () => study.nodes.filter((n) => n.treeId === treeId),
+      [treeId, study.nodes],
+    ),
     active = prefs.selected[treeId] || treeId
-  const byId = new Map(study.nodes.map((n) => [n.id, n])),
-    path = pathTo(study.nodes, active),
-    pathIds = new Set(path.map((n) => n.id))
+  const byId = React.useMemo(() => new Map(study.nodes.map((n) => [n.id, n])), [study.nodes]),
+    path = React.useMemo(() => pathTo(study.nodes, active), [study.nodes, active]),
+    pathIds = React.useMemo(() => new Set(path.map((n) => n.id)), [path])
   const patch = (props) => setPrefs((p) => ({ ...p, ...props }))
   const field = (name, id, value) =>
     setPrefs((p) => ({ ...p, [name]: { ...p[name], [id]: value } }))
@@ -233,6 +378,7 @@ export function StudyPage({ study }: { study: Study }) {
     setPrefs((p) => ({ ...p, tree: n.treeId, selected: { ...p.selected, [n.treeId]: n.id } }))
   }
   const pick = (n) => {
+    if (flow.current?.getZoom() < 0.6) focus(n)
     if (n.id !== active) {
       select(n)
       setSelection(null)
@@ -252,16 +398,42 @@ export function StudyPage({ study }: { study: Study }) {
       window.removeEventListener('focus', refresh)
     }
   }, [study])
-  useEffect(() => {
+  const device = useRef({ drafts: prefs.drafts, scroll: prefs.scroll })
+  const latest = useRef(prefs)
+  const timer = useRef(null)
+  const flush = React.useCallback(() => {
+    clearTimeout(timer.current)
+    if (timer.current === null) return
+    timer.current = null
     try {
-      localStorage.setItem(key, JSON.stringify(prefs))
+      localStorage.setItem(key, JSON.stringify({ ...latest.current, ...device.current }))
     } catch {
       setError('阅读位置和草稿未能保存到此设备')
     }
-  }, [prefs])
+  }, [])
+  const schedule = React.useCallback(() => {
+    clearTimeout(timer.current)
+    timer.current = setTimeout(flush, 220)
+  }, [flush])
+  useLayoutEffect(() => {
+    latest.current = prefs
+    schedule()
+  }, [prefs, schedule])
   useEffect(() => {
-    for (const n of turns) if (!study.issues.has(n.id)) study.watch(n)
-  }, [treeId, study.nodes])
+    window.addEventListener('pagehide', flush)
+    return () => {
+      window.removeEventListener('pagehide', flush)
+      flush()
+    }
+  }, [flush])
+  function saveDraft(id, value) {
+    device.current.drafts[id] = value
+    schedule()
+  }
+  useEffect(() => {
+    study.observe(turns, path)
+  }, [study, turns, path])
+  useEffect(() => () => study.observe([], []), [study])
   useEffect(() => {
     if (treeId && turns.some((n) => !prefs.positions[treeId]?.[n.id]))
       field('positions', treeId, positions)
@@ -271,18 +443,32 @@ export function StudyPage({ study }: { study: Study }) {
     if (!id || !positions[id] || !flow.current) return
     pendingFocus.current = null
     const { x, y } = positions[id]
-    flow.current.setCenter(x + 160, y + 150, { zoom: flow.current.getZoom(), duration: 180 })
+    flow.current.setCenter(x + 160, y + 150, {
+      zoom: Math.max(0.92, flow.current.getZoom()),
+      duration: 160,
+    })
   }, [active, positions])
   useLayoutEffect(() => {
     if (reader.current)
-      reader.current.scrollTop = prefs.scroll[active] ?? reader.current.scrollHeight
+      reader.current.scrollTop = device.current.scroll[active] ?? reader.current.scrollHeight
   }, [active, prefs.reader])
   useEffect(() => {
     const cancel = (e) => {
-      if (e.key === 'Escape') setSelection(null)
+      if (e.key === 'Escape') {
+        setSelection(null)
+        root.current?.querySelector('.st-actions')?.removeAttribute('open')
+      }
+    }
+    const dismissMenu = (event: PointerEvent) => {
+      if (event.target instanceof Element && !event.target.closest('.st-actions'))
+        root.current?.querySelector('.st-actions[open]')?.removeAttribute('open')
     }
     window.addEventListener('keydown', cancel)
-    return () => window.removeEventListener('keydown', cancel)
+    document.addEventListener('pointerdown', dismissMenu, true)
+    return () => {
+      window.removeEventListener('keydown', cancel)
+      document.removeEventListener('pointerdown', dismissMenu, true)
+    }
   }, [])
   function focus(n) {
     select(n)
@@ -318,11 +504,10 @@ export function StudyPage({ study }: { study: Study }) {
           pendingFocus.current = n.id
           select(n)
           setSelection(null)
-          setLibrary(false)
         },
         versionOf,
       )
-      if (!anchor && !versionOf) field('drafts', parent?.id || 'root', '')
+      if (!anchor && !versionOf) saveDraft(parent?.id || 'root', '')
     } catch (e) {
       setError(e.message)
     } finally {
@@ -354,23 +539,31 @@ export function StudyPage({ study }: { study: Study }) {
     if (context)
       requestAnimationFrame(() => root.current?.querySelector('.st-capsule input')?.focus())
   }
-  const nodes = turns.map((n) => ({
-    id: n.id,
-    type: 'turn',
-    data: { turn: n },
-    dragHandle: '.st-grip',
-    position: positions[n.id],
-    selected: n.id === active,
-  }))
-  const edges = turns
-    .filter((n) => n.parentId)
-    .map((n) => ({
-      id: n.id,
-      source: n.parentId,
-      target: n.id,
-      type: 'smoothstep',
-      style: { stroke: pathIds.has(n.id) ? 'var(--st-path)' : 'var(--st-line)' },
-    }))
+  const nodes = React.useMemo(
+    () =>
+      turns.map((n) => ({
+        id: n.id,
+        type: 'turn',
+        data: { turn: n },
+        dragHandle: '.st-grip',
+        position: positions[n.id],
+        selected: n.id === active,
+      })),
+    [turns, positions, active],
+  )
+  const edges = React.useMemo(
+    () =>
+      turns
+        .filter((n) => n.parentId)
+        .map((n) => ({
+          id: n.id,
+          source: n.parentId,
+          target: n.id,
+          type: 'smoothstep',
+          style: { stroke: pathIds.has(n.id) ? 'var(--st-path)' : 'var(--st-line)' },
+        })),
+    [turns, pathIds],
+  )
   function download(all) {
     const sorted = []
     function visit(n) {
@@ -417,7 +610,8 @@ export function StudyPage({ study }: { study: Study }) {
         focus,
         back,
         expand: (id, v) => field('expanded', id, v),
-        setDraft: (id, v) => field('drafts', id, v),
+        draft: (id) => device.current.drafts[id] || '',
+        saveDraft,
       }}
     >
       <section
@@ -428,44 +622,68 @@ export function StudyPage({ study }: { study: Study }) {
         }}
         onContextMenu={(e) => capture(e, true)}
       >
-        <aside className={'st-library ' + (library ? 'open' : '')}>
-          <header>
-            学习树
-            <button
-              aria-label="新建学习树"
-              onClick={() => {
-                setNewTree(true)
-                setLibrary(false)
-                setSelection(null)
-              }}
-            >
-              ＋
-            </button>
-          </header>
-          {roots.map((n) => (
-            <button
-              key={n.id}
-              className={treeId === n.id ? 'current' : ''}
-              onClick={() => {
-                setLibrary(false)
-                setNewTree(false)
-                patch({ tree: n.id })
-                setSelection(null)
-              }}
-            >
-              {n.title || n.question}
-            </button>
-          ))}
-        </aside>
+        {sidebar &&
+          createPortal(
+            sidebarWide ? (
+              <nav className="st-native-directory" aria-label="学习树目录">
+                <header>
+                  <span>学习目录</span>
+                  <button
+                    title="新建学习树"
+                    aria-label="新建学习树"
+                    onClick={() => {
+                      setNewTree(true)
+                      setEditing(null)
+                      setSelection(null)
+                      study.ctx.layout.selectPanel('dsh-study-tree')
+                    }}
+                  >
+                    <Plus size={16} />
+                  </button>
+                </header>
+                <div>
+                  {roots.map((n) => (
+                    <button
+                      key={n.id}
+                      title={n.title || n.question}
+                      aria-current={treeId === n.id ? 'page' : undefined}
+                      onClick={() => {
+                        setNewTree(false)
+                        patch({ tree: n.id })
+                        setEditing(null)
+                        setSelection(null)
+                        study.ctx.layout.selectPanel('dsh-study-tree')
+                      }}
+                    >
+                      <GitBranch size={15} />
+                      <span>{n.title || n.question}</span>
+                    </button>
+                  ))}
+                </div>
+              </nav>
+            ) : (
+              <button
+                className="st-native-rail"
+                aria-label="展开学习树目录"
+                title="展开学习树目录"
+                onClick={openSidebar}
+              >
+                <ListTree size={18} />
+              </button>
+            ),
+            sidebar,
+          )}
         <main>
           <header className="st-bar">
-            <button className="st-directory" onClick={() => setLibrary(!library)}>
-              目录
-            </button>
+            <span className="st-title-icon">
+              <GitBranch size={17} />
+            </span>
             <strong>{byId.get(treeId)?.title || byId.get(treeId)?.question || '新学习树'}</strong>
             {treeId && (
               <details className="st-actions">
-                <summary aria-label="学习树操作">···</summary>
+                <summary title="学习树操作" aria-label="学习树操作">
+                  <Ellipsis size={18} />
+                </summary>
                 <section onClick={(e) => e.currentTarget.parentElement.removeAttribute('open')}>
                   <button
                     onClick={() =>
@@ -497,8 +715,13 @@ export function StudyPage({ study }: { study: Study }) {
                 </section>
               </details>
             )}
-            <button onClick={() => patch({ reader: !prefs.reader })}>
-              {prefs.reader ? '收起阅读' : '路径阅读'}
+            <button
+              className="st-reader-switch"
+              aria-label={prefs.reader ? '收起阅读' : '路径阅读'}
+              title={prefs.reader ? '收起阅读' : '路径阅读'}
+              onClick={() => patch({ reader: !prefs.reader })}
+            >
+              {prefs.reader ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
             </button>
           </header>
           {editing && (
@@ -553,31 +776,26 @@ export function StudyPage({ study }: { study: Study }) {
               </div>
             </div>
           ) : (
-            <ReactFlow
+            <Canvas
               key={treeId}
               nodes={nodes}
               edges={edges}
-              nodeTypes={nodeTypes}
               onInit={(i) => {
                 flow.current = i
               }}
-              defaultViewport={prefs.views[treeId] || { x: 36, y: 48, zoom: 0.86 }}
-              onMoveEnd={(_, v) => field('views', treeId, v)}
-              onNodeDrag={(_, n) =>
-                field('positions', treeId, { ...positions, [n.id]: n.position })
-              }
-              onPaneClick={() => setSelection(null)}
-              onNodeDragStop={(_, n) =>
-                field('positions', treeId, { ...positions, [n.id]: n.position })
-              }
-              nodesConnectable={false}
-              minZoom={0.28}
-              maxZoom={1.65}
-              deleteKeyCode={null}
-            >
-              <Background gap={22} size={1} />
-              <Controls showInteractive={false} />
-            </ReactFlow>
+              view={prefs.views[treeId] || { x: 40, y: 52, zoom: 1 }}
+              onView={(v) => field('views', treeId, v)}
+              focusCurrent={() => {
+                const n = byId.get(active)
+                if (n) focus(n)
+              }}
+              onDropNode={(n) => field('positions', treeId, { ...positions, [n.id]: n.position })}
+              onBlank={() => {
+                setSelection(null)
+                const menu = root.current?.querySelector('.st-actions')
+                menu?.removeAttribute('open')
+              }}
+            />
           )}
         </main>
         {prefs.reader && treeId && (
@@ -590,16 +808,17 @@ export function StudyPage({ study }: { study: Study }) {
               tabIndex={0}
               onPointerDown={(e) => e.currentTarget.setPointerCapture(e.pointerId)}
               onPointerMove={(e) => {
-                if (e.currentTarget.hasPointerCapture(e.pointerId))
-                  patch({
-                    width: Math.max(
-                      248,
-                      Math.min(
-                        root.current.clientWidth * 0.58,
-                        root.current.getBoundingClientRect().right - e.clientX,
-                      ),
-                    ),
-                  })
+                if (!e.currentTarget.hasPointerCapture(e.pointerId)) return
+                const r = root.current.getBoundingClientRect()
+                root.current.style.setProperty(
+                  '--st-drag-width',
+                  Math.max(248, Math.min(r.width * 0.58, r.right - e.clientX)) + 'px',
+                )
+              }}
+              onLostPointerCapture={() => {
+                const width = parseFloat(root.current.style.getPropertyValue('--st-drag-width'))
+                if (Number.isFinite(width)) patch({ width })
+                root.current.style.removeProperty('--st-drag-width')
               }}
               onKeyDown={(e) => {
                 if (['ArrowLeft', 'ArrowRight'].includes(e.key)) {
@@ -616,11 +835,17 @@ export function StudyPage({ study }: { study: Study }) {
                 }
               }}
             />
-            <aside className="st-reader" style={{ width: prefs.width }}>
+            <aside
+              className="st-reader"
+              style={{ width: 'var(--st-drag-width,' + prefs.width + 'px)' }}
+            >
               <header>
-                <strong>路径阅读</strong>
+                <strong>
+                  <BookOpen size={16} />
+                  路径阅读
+                </strong>
                 <button aria-label="隐藏路径阅读" onClick={() => patch({ reader: false })}>
-                  ›
+                  <PanelRightClose size={17} />
                 </button>
               </header>
               <nav>
@@ -634,14 +859,24 @@ export function StudyPage({ study }: { study: Study }) {
               <div
                 className="st-chat"
                 ref={reader}
-                onScroll={(e) => field('scroll', active, e.currentTarget.scrollTop)}
+                onScroll={(e) => {
+                  device.current.scroll[active] = e.currentTarget.scrollTop
+                  schedule()
+                }}
               >
                 {path.map((n) => (
                   <section key={n.id}>
                     <div className="st-user">{n.question}</div>
                     <div className="st-agent">
                       <header>
-                        Agent<button onClick={() => focus(n)}>定位 ↗</button>
+                        Agent
+                        <button
+                          aria-label={'定位节点：' + n.question}
+                          title="定位节点"
+                          onClick={() => focus(n)}
+                        >
+                          <ArrowUpRight size={14} />
+                        </button>
                       </header>
                       <Body
                         n={n}
@@ -649,7 +884,9 @@ export function StudyPage({ study }: { study: Study }) {
                           study.answers.get(n.id) ||
                           n.error ||
                           study.issues.get(n.id) ||
-                          states[n.status]
+                          (study.answers.has(n.id) && n.status === 'complete'
+                            ? '本轮没有文本回复'
+                            : states[n.status])
                         }
                       />
                     </div>
@@ -695,7 +932,7 @@ export function StudyPage({ study }: { study: Study }) {
               disabled={busy || byId.get(selection.id)?.endSeq == null}
               aria-label="发送引用追问"
             >
-              ↑
+              <ArrowUp size={16} />
             </button>
           </form>
         )}
