@@ -313,6 +313,7 @@ function Canvas({ nodes, edges, onDropNode, onInit, view, onView, onBlank, focus
   )
   return (
     <ReactFlow
+      proOptions={{ hideAttribution: true }}
       nodes={display}
       edges={edges}
       nodeTypes={nodeTypes}
