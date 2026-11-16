@@ -1,5 +1,15 @@
 import { readTurn, type Turn, type Anchor } from './tree'
 export class Study {
+  version = 0
+  enabled = false
+  creating = false
+  pendingSession: string | null = null
+  pendingStop = () => {}
+  nativeTarget: string | null = null
+  active: string | null = null
+  navigation: { id: string | null; revision: number } | null = null
+  workspaceId: string | undefined
+  turnNumbers = new Map<string, number>()
   nodes: Turn[] = []
   answers = new Map<string, string>()
   issues = new Map<string, string>()
@@ -11,7 +21,122 @@ export class Study {
   loaded = false
   error = ''
   constructor(readonly ctx) {}
+  workspaceFor(sessionId) {
+    return this.ctx.workspaces.list
+      .getSnapshot()
+      .items.find((workspace) => workspace.sessionIds.includes(sessionId))?.workspaceId
+  }
+  startNew(workspaceId = this.workspaceId) {
+    this.enabled = false
+    this.creating = true
+    this.pendingStop()
+    this.pendingSession = null
+    this.workspaceId = workspaceId
+    this.ctx.uiWorkspace.startSession(workspaceId)
+    this.emit()
+  }
+  armRoot(sessionId) {
+    if (this.pendingSession === sessionId) return
+    this.pendingStop()
+    this.pendingSession = sessionId
+    this.creating = true
+    const reference = this.ctx.sessions.retain(sessionId, { source: 'studyTree' })
+    let off = () => {}
+    let stopped = false
+    let saving = false
+    const id = crypto.randomUUID()
+    this.pendingStop = () => {
+      stopped = true
+      off()
+      reference.release()
+      this.pendingSession = null
+    }
+    reference.ready
+      .then((binding) => {
+        if (stopped) return
+        const read = async () => {
+          if (saving || stopped) return
+          const message = binding.eventSource
+            .getSnapshot()
+            .entries.find(
+              ({ event }) => event.type === 'user/message' && event.data.source?.rpcId,
+            )?.event
+          if (!message) return
+          saving = true
+          try {
+            const question =
+              message.data.content
+                .filter((part) => part.type === 'text')
+                .map((part) => part.text)
+                .join('\n') || '阅读附件'
+            const node =
+              this.nodes.find((item) => item.id === id) ||
+              (await this.save({
+                id,
+                treeId: id,
+                parentId: null,
+                question,
+                anchor: null,
+                created: Date.now(),
+                sessionId,
+                requestId: message.data.source.rpcId,
+                endSeq: null,
+                status: 'sending',
+                error: null,
+                revision: 0,
+              }))
+            this.watch(node)
+            if (!stopped) {
+              this.creating = false
+              this.pendingStop()
+              this.open(node.id)
+            }
+          } catch (error) {
+            saving = false
+            this.error = error.message
+            await this.refresh().catch(() => {})
+            if (!stopped && this.nodes.some((item) => item.id === id)) void read()
+            this.emit()
+          }
+        }
+        off = binding.eventSource.subscribe(() => {
+          void read()
+        })
+        void read()
+      })
+      .catch((error) => {
+        this.error = error.message
+        this.pendingStop()
+        this.emit()
+      })
+    this.emit()
+  }
+  showSession(sessionId) {
+    if (this.ctx.uiSession.adapter.current.getSnapshot().key === sessionId) {
+      this.nativeTarget = null
+      return
+    }
+    if (this.nativeTarget === sessionId) return
+    this.nativeTarget = sessionId
+    this.ctx.uiWorkspace.openSession(sessionId)
+  }
+  open(id: string | null) {
+    if (!id) {
+      this.startNew()
+      return
+    }
+    const node = this.nodes.find((item) => item.id === id)
+    if (!node) return
+    const root = this.nodes.find((item) => item.id === node.treeId)
+    this.workspaceId = this.workspaceFor(root?.sessionId)
+    this.navigation = { id, revision: (this.navigation?.revision || 0) + 1 }
+    this.active = id
+    this.enabled = true
+    if (node.sessionId) this.showSession(node.sessionId)
+    this.emit()
+  }
   emit() {
+    this.version++
     for (const f of this.listeners) f()
   }
   async call(method, args = {}) {
@@ -82,7 +207,7 @@ export class Study {
     try {
       const sessionId = parent
         ? await this.ctx.sessions.fork({ sessionId: parent.sessionId, atSeq: parent.endSeq })
-        : await this.ctx.sessions.create()
+        : await this.ctx.sessions.create({ workspaceId: this.workspaceId })
       n = await this.save({ ...n, sessionId })
       await this.ctx.sessions.using(sessionId, { source: 'studyTree' }, async (ref) => {
         const { session } = await ref.ready
@@ -187,7 +312,16 @@ export class Study {
         let finishing = false
         const read = () => {
           if (stopped || finishing) return
-          const result = readTurn(binding.eventSource.getSnapshot().entries, n.requestId)
+          const entries = binding.eventSource.getSnapshot().entries
+          let turnNumber: number | undefined
+          for (const { event } of entries) {
+            if (event.type === 'turn/start') turnNumber = event.data.turn
+            if (event.type === 'user/message' && event.data.source?.rpcId === n.requestId) {
+              if (turnNumber !== undefined) this.turnNumbers.set(n.id, turnNumber)
+              break
+            }
+          }
+          const result = readTurn(entries, n.requestId)
           if (n.endSeq !== null && result.endSeq === null) {
             fail(new Error('未能读取此节点的完整问答，请刷新后重试'))
             return
@@ -240,6 +374,7 @@ export class Study {
   }
   dispose() {
     this.closing = true
+    this.pendingStop()
     for (const stop of [...this.watches.values()]) stop()
     this.listeners.clear()
   }

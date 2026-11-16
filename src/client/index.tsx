@@ -1,79 +1,114 @@
-import React, { useSyncExternalStore } from 'react'
+import React from 'react'
 import { Study } from './study'
-import { StudyPage } from './StudyPage'
+import { WorkspaceTree, NewStudyButton, useStudy } from './WorkspaceTree'
+import { NativeFrame } from './NativeFrame'
 import '@xyflow/react/dist/style.css'
 import './study.css'
 
 declare const STUDY_CSS: string
-export const inject = ['slots', 'sessions', 'connection', 'layout']
+export const inject = [
+  'slots',
+  'sessions',
+  'connection',
+  'layout',
+  'contextMenus',
+  'workspaces',
+  'uiWorkspace',
+  'uiSession',
+]
 export function apply(ctx) {
   const study = new Study(ctx)
-  // The page owns navigation state. The host owns the sidebar element and its lifetime.
-  let seat: HTMLDivElement | null = null
-  let wide = true
-  const listeners = new Set<() => void>()
-  const subscribe = (listener: () => void) => {
-    listeners.add(listener)
-    return () => listeners.delete(listener)
-  }
-  const mounts = [false, true].map((expanded) => (el: HTMLDivElement | null) => {
-    seat = el
-    wide = expanded
-    for (const fn of listeners) fn()
-  })
-  ctx.slots.inject('sidebar.footer.action', () =>
-    ctx.slots.register(
-      { name: 'sidebar.footer.action', id: 'dsh-study-tree.directory' },
-      ({ wide }) => (
-        <div key={String(wide)} className="st-sidebar-seat" ref={mounts[Number(wide)]} />
-      ),
-    ),
-  )
-  function Panel() {
-    const sidebar = useSyncExternalStore(subscribe, () => seat)
-    return (
-      <>
-        <style>{STUDY_CSS}</style>
-        <StudyPage
-          study={study}
-          sidebar={sidebar}
-          sidebarWide={wide}
-          openSidebar={() => ctx.layout.toggleSidebar()}
-        />
-      </>
-    )
-  }
+  const representatives = new Map()
   ctx.effect(() => () => study.dispose())
-  ctx.on('connection/reset', () => {
-    void study.refresh().catch((e) => {
-      study.error = e.message
+  const refresh = () =>
+    void study.refresh().catch((error) => {
+      study.error = error.message
       study.emit()
     })
+  refresh()
+  ctx.on('connection/reset', refresh)
+  ctx.effect(() => ctx.workspaces.list.subscribe(() => study.emit()))
+  ctx.effect(() => {
+    window.addEventListener('focus', refresh)
+    return () => window.removeEventListener('focus', refresh)
   })
-  ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: 'dsh-study-tree' }, Panel))
-  ctx.slots.inject('sidebar.panellist', () =>
+  ctx.slots.inject('shell.overlay', () =>
+    ctx.slots.register({ name: 'shell.overlay', id: 'dsh-study-tree.styles' }, (props) => (
+      <>
+        <style>{STUDY_CSS}</style>
+        <NativeFrame {...props} study={study} />
+      </>
+    )),
+  )
+  ctx.slots.inject('sidebar.session.row.trailing', () =>
     ctx.slots.register(
-      {
-        name: 'sidebar.panellist',
-        id: 'dsh-study-tree',
-        order: 5,
-        label: () => '学习树',
+      { name: 'sidebar.session.row.trailing', id: 'dsh-study-tree.directory' },
+      (props) => <WorkspaceTree study={study} {...props} representatives={representatives} />,
+    ),
+  )
+  ctx.effect(() =>
+    ctx.contextMenus.register({
+      id: 'dsh-study-tree.workspace',
+      target: 'workspace',
+      order: 250,
+      resolve: ({ workspaceId }) => [
+        {
+          id: 'new-study',
+          label: '新建学习主题',
+          run: () => {
+            study.workspaceId = workspaceId
+            study.open(null)
+          },
+        },
+      ],
+    }),
+  )
+  ctx.effect(() =>
+    ctx.contextMenus.register({
+      id: 'dsh-study-tree.session',
+      target: 'session',
+      order: 250,
+      resolve: ({ sessionId }) => {
+        const node = study.nodes.find((item) => item.sessionId === sessionId)
+        return [
+          {
+            id: 'open-study',
+            label: node ? '打开学习画布' : '新建学习主题',
+            run: () => {
+              if (!node)
+                study.workspaceId = ctx.workspaces.list
+                  .getSnapshot()
+                  .items.find((workspace) => workspace.sessionIds.includes(sessionId))?.workspaceId
+              study.open(node?.id || null)
+            },
+          },
+        ]
       },
-      ({ size = 20 }) => (
-        <svg
-          width={size}
-          height={size}
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.6"
-        >
-          <path d="M5 12h3c4 0 4-6 8-6m-8 6c4 0 4 6 8 6" />
-          <circle cx="4" cy="12" r="2" />
-          <circle cx="18" cy="6" r="2" />
-          <circle cx="18" cy="18" r="2" />
-        </svg>
-      ),
+    }),
+  )
+  ctx.slots.inject('conversation.session.header.actions', () =>
+    ctx.slots.register(
+      { name: 'conversation.session.header.actions', id: 'dsh-study-tree.new' },
+      ({ sessionId }) => <NewStudyButton study={study} sessionId={sessionId} />,
+    ),
+  )
+  ctx.slots.inject('conversation.hero.options', () =>
+    ctx.slots.register(
+      { name: 'conversation.hero.options', id: 'dsh-study-tree.new' },
+      ({ sessionId }) => {
+        useStudy(study)
+        return (
+          <button
+            className="st-native-start"
+            onClick={() => {
+              if (sessionId) study.armRoot(sessionId)
+              else study.startNew()
+            }}
+          >
+            {study.creating ? '学习画布已启用' : '以学习画布开始'}
+          </button>
+        )
+      },
     ),
   )
 }

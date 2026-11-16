@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import React, {
   createContext,
   useContext,
@@ -7,11 +8,9 @@ import React, {
   useRef,
   useState,
 } from 'react'
-import { createPortal } from 'react-dom'
 import {
   GitBranch,
   CornerDownRight,
-  BookOpen,
   PanelRightOpen,
   PanelRightClose,
   Plus,
@@ -21,7 +20,6 @@ import {
   ArrowUp,
   Ellipsis,
   GripHorizontal,
-  ListTree,
   ArrowUpRight,
 } from 'lucide-react'
 import {
@@ -41,6 +39,7 @@ import katex from 'rehype-katex'
 import { pathTo, type Anchor, type Turn } from './tree'
 import { locate, selectionAt } from './selection'
 import { Study } from './study'
+import { NativeBoundary } from './NativeFrame'
 
 const UI = createContext<any>(null)
 const states = {
@@ -63,10 +62,10 @@ const Body = React.memo(function Body({ n, text }: { n: Turn; text: string }) {
     </div>
   )
 })
-function Composer({ id, root = false }) {
+function Composer({ id }) {
   const ui = useContext(UI)
   const [draft, setDraft] = useState(() => ui.draft(id))
-  const send = () => ui.submit(root ? null : ui.byId.get(id), draft, null)
+  const send = () => ui.submit(ui.byId.get(id), draft, null)
   return (
     <form
       className="st-composer nodrag nopan nowheel"
@@ -76,8 +75,8 @@ function Composer({ id, root = false }) {
       }}
     >
       <textarea
-        aria-label={root ? '学习主题' : '继续追问'}
-        placeholder={root ? '你想学习什么？' : '从这里继续追问…'}
+        aria-label="继续追问"
+        placeholder="从这里继续追问…"
         value={draft}
         onChange={(e) => {
           setDraft(e.target.value)
@@ -91,37 +90,31 @@ function Composer({ id, root = false }) {
         }}
       />
       <div>
-        {root ? (
-          <span>新学习树</span>
-        ) : (
-          <button
-            type="button"
-            className="st-add"
-            aria-label="引用本轮回答"
-            title="引用本轮回答"
-            onClick={(e) => {
-              const card = e.currentTarget.closest('.st-card')
-              ui.expand(id, true)
-              requestAnimationFrame(() => {
-                const body = card?.querySelector('[data-answer]')
-                if (!body?.textContent || ui.byId.get(id)?.endSeq == null) return
-                const r = new Range()
-                r.selectNodeContents(body)
-                const s = getSelection()
-                s?.removeAllRanges()
-                s?.addRange(r)
-                body.dispatchEvent(
-                  new MouseEvent('contextmenu', { bubbles: true, cancelable: true }),
-                )
-              })
-            }}
-          >
-            <Plus size={17} />
-          </button>
-        )}
+        <button
+          type="button"
+          className="st-add"
+          aria-label="引用本轮回答"
+          title="引用本轮回答"
+          onClick={(e) => {
+            const card = e.currentTarget.closest('.st-card')
+            ui.expand(id, true)
+            requestAnimationFrame(() => {
+              const body = card?.querySelector('[data-answer]')
+              if (!body?.textContent || ui.byId.get(id)?.endSeq == null) return
+              const r = new Range()
+              r.selectNodeContents(body)
+              const s = getSelection()
+              s?.removeAllRanges()
+              s?.addRange(r)
+              body.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+            })
+          }}
+        >
+          <Plus size={17} />
+        </button>
         <button
           aria-label="发送问题"
-          disabled={!draft.trim() || ui.busy || (!root && ui.byId.get(id)?.endSeq == null)}
+          disabled={!draft.trim() || ui.busy || ui.byId.get(id)?.endSeq == null}
         >
           <ArrowUp size={16} />
         </button>
@@ -221,13 +214,17 @@ const emptyPrefs = () => ({
   positions: {},
   views: {},
   reader: true,
-  width: 332,
+  width: 480,
   scroll: {},
 })
 const key = 'dsh-study-tree:view:v1'
 function readPrefs() {
   try {
     const saved = { ...emptyPrefs(), ...JSON.parse(localStorage.getItem(key) || '{}') }
+    if (!saved.nativeFrameVersion) {
+      saved.width = Math.max(480, saved.width)
+      saved.nativeFrameVersion = 1
+    }
     if (!saved.canvasVersion) {
       for (const [tree, view] of Object.entries(saved.views)) {
         if (view.zoom >= 0.6) continue
@@ -331,26 +328,15 @@ function Canvas({ nodes, edges, onDropNode, onInit, view, onView, onBlank, focus
       maxZoom={1.65}
       deleteKeyCode={null}
     >
-      <Background gap={24} size={1} />
+      <Background gap={24} size={1} color="var(--dsw-alias-border-l3)" />
       <CanvasTools focusCurrent={focusCurrent} />
     </ReactFlow>
   )
 }
 
-export function StudyPage({
-  study,
-  sidebar,
-  sidebarWide,
-  openSidebar,
-}: {
-  study: Study
-  sidebar: HTMLElement | null
-  sidebarWide: boolean
-  openSidebar: () => void
-}) {
+export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
   const [, redraw] = useReducer((v) => v + 1, 0),
     [prefs, setPrefs] = useState(readPrefs)
-  const [newTree, setNewTree] = useState(false)
   const [selection, setSelection] = useState(null),
     [question, setQuestion] = useState('')
   const [error, setError] = useState(''),
@@ -358,16 +344,16 @@ export function StudyPage({
   const [editing, setEditing] = useState(null)
   const lock = useRef(false),
     flow = useRef(null),
-    root = useRef(null),
-    reader = useRef(null)
+    root = useRef(null)
   const pendingFocus = useRef<string | null>(null)
   const roots = React.useMemo(() => study.nodes.filter((n) => !n.parentId), [study.nodes])
-  const treeId = newTree ? null : roots.find((n) => n.id === prefs.tree)?.id || roots[0]?.id
+  const requested = study.nodes.find((node) => node.id === study.active)
+  const treeId = requested?.treeId || roots.find((n) => n.id === prefs.tree)?.id || roots[0]?.id
   const turns = React.useMemo(
       () => study.nodes.filter((n) => n.treeId === treeId),
       [treeId, study.nodes],
     ),
-    active = prefs.selected[treeId] || treeId
+    active = requested?.id || prefs.selected[treeId] || treeId
   const byId = React.useMemo(() => new Map(study.nodes.map((n) => [n.id, n])), [study.nodes]),
     path = React.useMemo(() => pathTo(study.nodes, active), [study.nodes, active]),
     pathIds = React.useMemo(() => new Set(path.map((n) => n.id)), [path])
@@ -375,7 +361,10 @@ export function StudyPage({
   const field = (name, id, value) =>
     setPrefs((p) => ({ ...p, [name]: { ...p[name], [id]: value } }))
   const select = (n) => {
-    setNewTree(false)
+    if (study.active !== n.id) {
+      study.active = n.id
+      study.emit()
+    }
     setPrefs((p) => ({ ...p, tree: n.treeId, selected: { ...p.selected, [n.treeId]: n.id } }))
   }
   const pick = (n) => {
@@ -385,6 +374,33 @@ export function StudyPage({
       setSelection(null)
     }
   }
+  useEffect(() => {
+    const target = study.navigation
+    if (!target) return
+    study.navigation = null
+    const node = study.nodes.find((item) => item.id === target.id)
+    if (node) {
+      select(node)
+      pendingFocus.current = node.id
+      setSelection(null)
+    }
+  }, [study.navigation])
+  useEffect(() => {
+    if (study.active !== active) {
+      study.active = active
+      study.emit()
+    }
+  }, [active])
+  const nativeSessionId = byId.get(active)?.sessionId
+  useEffect(() => {
+    if (nativeSessionId) study.showSession(nativeSessionId)
+  }, [nativeSessionId])
+  useEffect(() => {
+    study.hideReader = () => patch({ reader: false })
+    return () => {
+      study.hideReader = null
+    }
+  }, [study])
   const positions = React.useMemo(
     () => initialPositions(turns, prefs.positions[treeId] || {}),
     [treeId, turns.map((n) => n.id).join(), prefs.positions],
@@ -449,10 +465,7 @@ export function StudyPage({
       duration: 160,
     })
   }, [active, positions])
-  useLayoutEffect(() => {
-    if (reader.current)
-      reader.current.scrollTop = device.current.scroll[active] ?? reader.current.scrollHeight
-  }, [active, prefs.reader])
+
   useEffect(() => {
     const cancel = (e) => {
       if (e.key === 'Escape') {
@@ -524,12 +537,12 @@ export function StudyPage({
     }
     const range = s.getRangeAt(0),
       body = range.startContainer.parentElement?.closest('[data-answer]')
-    if (!body || !root.current.contains(body)) return
+    if (!body || !nativeFrame.contains(body)) return
     const anchor = selectionAt(body, range)
     if (!anchor) return
     if (context) e.preventDefault()
     const rect = range.getBoundingClientRect(),
-      bounds = root.current.getBoundingClientRect()
+      bounds = nativeFrame.getBoundingClientRect()
     setSelection({
       id: body.dataset.answer,
       anchor,
@@ -538,7 +551,7 @@ export function StudyPage({
     })
     setQuestion('')
     if (context)
-      requestAnimationFrame(() => root.current?.querySelector('.st-capsule input')?.focus())
+      requestAnimationFrame(() => nativeFrame.querySelector('.st-capsule input')?.focus())
   }
   const nodes = React.useMemo(
     () =>
@@ -621,61 +634,18 @@ export function StudyPage({
         onMouseUp={(e) => {
           if (!e.target.closest('.st-capsule')) capture(e, false)
         }}
-        onContextMenu={(e) => capture(e, true)}
+        onContextMenuCapture={(e) => {
+          if (e.target.closest('[data-answer]')) {
+            capture(e, true)
+            if (window.getSelection()?.toString()) e.stopPropagation()
+          }
+        }}
       >
-        {sidebar &&
-          createPortal(
-            sidebarWide ? (
-              <nav className="st-native-directory" aria-label="学习树目录">
-                <header>
-                  <span>学习目录</span>
-                  <button
-                    title="新建学习树"
-                    aria-label="新建学习树"
-                    onClick={() => {
-                      setNewTree(true)
-                      setEditing(null)
-                      setSelection(null)
-                      study.ctx.layout.selectPanel('dsh-study-tree')
-                    }}
-                  >
-                    <Plus size={16} />
-                  </button>
-                </header>
-                <div>
-                  {roots.map((n) => (
-                    <button
-                      key={n.id}
-                      title={n.title || n.question}
-                      aria-current={treeId === n.id ? 'page' : undefined}
-                      onClick={() => {
-                        setNewTree(false)
-                        patch({ tree: n.id })
-                        setEditing(null)
-                        setSelection(null)
-                        study.ctx.layout.selectPanel('dsh-study-tree')
-                      }}
-                    >
-                      <GitBranch size={15} />
-                      <span>{n.title || n.question}</span>
-                    </button>
-                  ))}
-                </div>
-              </nav>
-            ) : (
-              <button
-                className="st-native-rail"
-                aria-label="展开学习树目录"
-                title="展开学习树目录"
-                onClick={openSidebar}
-              >
-                <ListTree size={18} />
-              </button>
-            ),
-            sidebar,
-          )}
         <main>
           <header className="st-bar">
+            <button title="新建学习主题" aria-label="新建学习主题" onClick={() => study.open(null)}>
+              <Plus size={17} />
+            </button>
             <span className="st-title-icon">
               <GitBranch size={17} />
             </span>
@@ -686,6 +656,26 @@ export function StudyPage({
                   <Ellipsis size={18} />
                 </summary>
                 <section onClick={(e) => e.currentTarget.parentElement.removeAttribute('open')}>
+                  <button
+                    disabled={path.some((n) => !study.answers.has(n.id))}
+                    onClick={() => download(false)}
+                  >
+                    导出当前路径
+                  </button>
+                  <button
+                    disabled={turns.some((n) => !study.answers.has(n.id))}
+                    onClick={() => download(true)}
+                  >
+                    导出整棵树
+                  </button>
+                  <button
+                    onClick={() => {
+                      study.enabled = false
+                      study.emit()
+                    }}
+                  >
+                    打开完整对话
+                  </button>
                   <button
                     onClick={() =>
                       setEditing({
@@ -718,8 +708,8 @@ export function StudyPage({
             )}
             <button
               className="st-reader-switch"
-              aria-label={prefs.reader ? '收起阅读' : '路径阅读'}
-              title={prefs.reader ? '收起阅读' : '路径阅读'}
+              aria-label={prefs.reader ? '收起对话' : '显示对话'}
+              title={prefs.reader ? '收起对话' : '显示对话'}
               onClick={() => patch({ reader: !prefs.reader })}
             >
               {prefs.reader ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
@@ -769,14 +759,7 @@ export function StudyPage({
               </button>
             </div>
           ) : null}
-          {!treeId ? (
-            <div className="st-start">
-              <div>
-                <h2>从一个问题开始</h2>
-                <Composer id="root" root />
-              </div>
-            </div>
-          ) : (
+          {treeId && (
             <Canvas
               key={treeId}
               nodes={nodes}
@@ -804,22 +787,21 @@ export function StudyPage({
             <div
               className="st-split"
               role="separator"
-              aria-label="调整阅读区宽度"
+              aria-label="调整对话区宽度"
               aria-orientation="vertical"
               tabIndex={0}
               onPointerDown={(e) => e.currentTarget.setPointerCapture(e.pointerId)}
               onPointerMove={(e) => {
                 if (!e.currentTarget.hasPointerCapture(e.pointerId)) return
-                const r = root.current.getBoundingClientRect()
-                root.current.style.setProperty(
-                  '--st-drag-width',
+                const r = nativeFrame.getBoundingClientRect()
+                nativeFrame.style.setProperty(
+                  '--st-reader-width',
                   Math.max(248, Math.min(r.width * 0.58, r.right - e.clientX)) + 'px',
                 )
               }}
               onLostPointerCapture={() => {
-                const width = parseFloat(root.current.style.getPropertyValue('--st-drag-width'))
+                const width = parseFloat(nativeFrame.style.getPropertyValue('--st-reader-width'))
                 if (Number.isFinite(width)) patch({ width })
-                root.current.style.removeProperty('--st-drag-width')
               }}
               onKeyDown={(e) => {
                 if (['ArrowLeft', 'ArrowRight'].includes(e.key)) {
@@ -828,7 +810,7 @@ export function StudyPage({
                     width: Math.max(
                       248,
                       Math.min(
-                        root.current.clientWidth * 0.58,
+                        nativeFrame.clientWidth * 0.58,
                         prefs.width + (e.key === 'ArrowLeft' ? 20 : -20),
                       ),
                     ),
@@ -836,107 +818,52 @@ export function StudyPage({
                 }
               }}
             />
-            <aside
-              className="st-reader"
-              style={{ width: 'var(--st-drag-width,' + prefs.width + 'px)' }}
-            >
-              <header>
-                <strong>
-                  <BookOpen size={16} />
-                  路径阅读
-                </strong>
-                <button aria-label="隐藏路径阅读" onClick={() => patch({ reader: false })}>
-                  <PanelRightClose size={17} />
-                </button>
-              </header>
-              <nav>
-                {path.map((n, i) => (
-                  <React.Fragment key={n.id}>
-                    {i > 0 && ' › '}
-                    <button onClick={() => focus(n)}>{n.question}</button>
-                  </React.Fragment>
-                ))}
-              </nav>
-              <div
-                className="st-chat"
-                ref={reader}
-                onScroll={(e) => {
-                  device.current.scroll[active] = e.currentTarget.scrollTop
-                  schedule()
-                }}
-              >
-                {path.map((n) => (
-                  <section key={n.id}>
-                    <div className="st-user">{n.question}</div>
-                    <div className="st-agent">
-                      <header>
-                        Agent
-                        <button
-                          aria-label={'定位节点：' + n.question}
-                          title="定位节点"
-                          onClick={() => focus(n)}
-                        >
-                          <ArrowUpRight size={14} />
-                        </button>
-                      </header>
-                      <Body
-                        n={n}
-                        text={
-                          study.answers.get(n.id) ||
-                          n.error ||
-                          study.issues.get(n.id) ||
-                          (study.answers.has(n.id) && n.status === 'complete'
-                            ? '本轮没有文本回复'
-                            : states[n.status])
-                        }
-                      />
-                    </div>
-                  </section>
-                ))}
-              </div>
-              <footer>
-                <button
-                  onClick={() => download(false)}
-                  disabled={path.some((n) => !study.answers.has(n.id))}
-                >
-                  导出路径
-                </button>
-                <button
-                  onClick={() => download(true)}
-                  disabled={turns.some((n) => !study.answers.has(n.id))}
-                >
-                  导出整树
-                </button>
-              </footer>
-            </aside>
           </>
         )}
-        {selection && (
-          <form
-            className="st-capsule"
-            style={{ left: selection.x, top: selection.y }}
-            onSubmit={(e) => {
-              e.preventDefault()
-              void submit(byId.get(selection.id), question, selection.anchor)
-            }}
-          >
-            <input
-              placeholder="添加可选问题…"
-              aria-label="引用追问"
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && e.nativeEvent.isComposing) e.preventDefault()
+        <NativeBoundary
+          study={study}
+          path={path}
+          frame={nativeFrame}
+          sessionKey={nativeSessionKey}
+          visible={prefs.reader}
+          width={prefs.width}
+          readingState={{
+            position: device.current.scroll[active],
+            onScroll: (position) => {
+              device.current.scroll[active] = position
+              schedule()
+            },
+          }}
+          onQuote={(event) => capture(event, true)}
+        />
+        {selection &&
+          createPortal(
+            <form
+              className="st-capsule"
+              style={{ left: selection.x, top: selection.y }}
+              onSubmit={(e) => {
+                e.preventDefault()
+                void submit(byId.get(selection.id), question, selection.anchor)
               }}
-            />
-            <button
-              disabled={busy || byId.get(selection.id)?.endSeq == null}
-              aria-label="发送引用追问"
             >
-              <ArrowUp size={16} />
-            </button>
-          </form>
-        )}
+              <input
+                placeholder="添加可选问题…"
+                aria-label="引用追问"
+                value={question}
+                onChange={(e) => setQuestion(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && e.nativeEvent.isComposing) e.preventDefault()
+                }}
+              />
+              <button
+                disabled={busy || byId.get(selection.id)?.endSeq == null}
+                aria-label="发送引用追问"
+              >
+                <ArrowUp size={16} />
+              </button>
+            </form>,
+            nativeFrame,
+          )}
       </section>
     </UI.Provider>
   )
