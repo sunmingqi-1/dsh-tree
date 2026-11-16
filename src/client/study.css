@@ -117,6 +117,37 @@
   --xy-controls-button-background-color: var(--st-pane);
   --xy-controls-button-color: var(--st-ink);
 }
+.st .react-flow__viewport {
+  will-change: transform;
+}
+.st-grid {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: -1;
+  contain: layout paint;
+  background: var(--st-bg);
+}
+.st-grid-texture {
+  --st-grid-gap: 24px;
+  --st-grid-radius: 0.5px;
+  position: absolute;
+  left: calc(0px - var(--st-grid-gap));
+  top: calc(0px - var(--st-grid-gap));
+  width: calc(100% + var(--st-grid-gap) + var(--st-grid-gap));
+  height: calc(100% + var(--st-grid-gap) + var(--st-grid-gap));
+  pointer-events: none;
+  will-change: transform;
+  transform: translate3d(0, 0, 0);
+  background-image: radial-gradient(
+    circle at calc(50% + var(--st-grid-radius)) calc(50% + var(--st-grid-radius)),
+    var(--dsw-alias-border-l3) 0 var(--st-grid-radius),
+    transparent var(--st-grid-radius)
+  );
+  background-repeat: repeat;
+  background-size: var(--st-grid-gap) var(--st-grid-gap);
+}
 .st .react-flow__node-turn {
   width: 340px;
 }

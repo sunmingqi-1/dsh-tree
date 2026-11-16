@@ -27,7 +27,6 @@ import {
   ReactFlow,
   Handle,
   Position,
-  Background,
   Panel,
   useStore,
   useReactFlow,
@@ -41,6 +40,7 @@ import { pathTo, type Anchor, type Turn } from './tree'
 import { locate, selectionAt } from './selection'
 import { Study } from './study'
 import { NativeBoundary } from './NativeFrame'
+import { CanvasBackground } from './CanvasBackground'
 import { arrange, extendDown, makeRoom, sizeOf, LAYOUT_VERSION, type Sizes } from './layout'
 
 const UI = createContext<any>(null)
@@ -351,7 +351,7 @@ function Canvas({
       maxZoom={1.65}
       deleteKeyCode={null}
     >
-      <Background gap={24} size={1} color="var(--dsw-alias-border-l3)" />
+      <CanvasBackground />
       <CanvasTools
         focusCurrent={focusCurrent}
         edgeStyle={edgeStyle}
