@@ -4,8 +4,8 @@ import type { Turn } from './tree'
 type Node = Pick<Turn, 'id' | 'parentId'>
 export type Positions = Record<string, { x: number; y: number }>
 export type Sizes = Record<string, { width: number; height: number }>
-export const LAYOUT_VERSION = 1
-const FALLBACK = { width: 340, height: 430 }
+export const LAYOUT_VERSION = 2
+const FALLBACK = { width: 560, height: 320 }
 const COLUMN_GAP = 72
 const ROW_GAP = 88
 

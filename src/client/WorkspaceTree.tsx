@@ -84,7 +84,7 @@ export function WorkspaceTree({
       window.removeEventListener('study-tree-folds', update)
     }
   }, [])
-  if (!node) return null
+  if (!node) return Object.values(study.readerDrafts).includes(sessionId) ? <span className="st-tree-member" /> : null
   if (representatives.get(group)?.values().next().value !== sessionId)
     return <span className="st-tree-member" />
   const trees = new Set(

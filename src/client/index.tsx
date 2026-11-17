@@ -1,7 +1,8 @@
 import React from 'react'
 import { Study } from './study'
 import { WorkspaceTree, NewStudyButton, useStudy } from './WorkspaceTree'
-import { NativeFrame } from './NativeFrame'
+import { NativeFrame, NativeCardControls } from './NativeFrame'
+import { controlSeat, mirrorNativeControl } from './nativeControls'
 import '@xyflow/react/dist/style.css'
 import './study.css'
 
@@ -88,10 +89,17 @@ export function apply(ctx) {
   )
   ctx.slots.inject('conversation.session.header.actions', () =>
     ctx.slots.register(
-      { name: 'conversation.session.header.actions', id: 'dsh-study-tree.new' },
-      ({ sessionId }) => <NewStudyButton study={study} sessionId={sessionId} />,
+      { name: 'conversation.session.header.actions', id: 'dsh-study-tree.new', children: {
+        [controlSeat('conversation.input.permission')]: { kind: 'single', scope: 'session' },
+        [controlSeat('conversation.input.model')]: { kind: 'single', scope: 'session' },
+      } },
+      (props) => <><NewStudyButton study={study} sessionId={props.sessionId} /><NativeCardControls study={study} {...props} /></>,
     ),
   )
+  ctx.effect(() => {
+    const stops = ['conversation.input.permission', 'conversation.input.model'].map(name => mirrorNativeControl(ctx, name))
+    return () => stops.forEach(stop => stop())
+  })
   ctx.slots.inject('conversation.hero.options', () =>
     ctx.slots.register(
       { name: 'conversation.hero.options', id: 'dsh-study-tree.new' },

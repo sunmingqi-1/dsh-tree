@@ -31,27 +31,27 @@
   --st-line: var(--dsw-alias-border-l2);
   --st-path: var(--dsw-alias-state-business-primary);
 }
-.st button:where(:not(.st-native-reader *)),
+.st button:where(:not(.st-native-reader *, .st-native-controls *)),
 .st textarea,
 .st input {
   font: inherit;
   color: inherit;
 }
-.st button:where(:not(.st-native-reader *)) {
+.st button:where(:not(.st-native-reader *, .st-native-controls *)) {
   cursor: pointer;
   border: 0;
   background: transparent;
   border-radius: 7px;
   padding: 4px 8px;
 }
-.st button:where(:not(.st-native-reader *)):hover {
+.st button:where(:not(.st-native-reader *, .st-native-controls *)):hover {
   background: var(--st-soft);
 }
-.st button:where(:not(.st-native-reader *)):disabled {
+.st button:where(:not(.st-native-reader *, .st-native-controls *)):disabled {
   opacity: 0.48;
   cursor: default;
 }
-.st button:where(:not(.st-native-reader *)):focus-visible,
+.st button:where(:not(.st-native-reader *, .st-native-controls *)):focus-visible,
 .st [tabindex]:focus-visible {
   outline: 2px solid var(--st-path);
   outline-offset: 2px;
@@ -149,7 +149,7 @@
   background-size: var(--st-grid-gap) var(--st-grid-gap);
 }
 .st .react-flow__node-turn {
-  width: 340px;
+  width: 560px;
 }
 .st .react-flow__handle {
   width: 6px;
@@ -158,35 +158,60 @@
   border: 1px solid var(--st-pane);
 }
 .st-card {
-  padding: 17px 18px 14px;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
   border: 1px solid var(--st-line);
-  background: var(--st-pane);
-  border-radius: 18px;
-  box-shadow: var(--dsw-elevation-panel);
+  background: var(--st-bg);
+  border-radius: 16px;
+  box-shadow: var(--dsw-elevation-soft);
 }
+.st-card.sized { height: 100%; min-height: 0; }
 .st-card.active {
   border-color: var(--st-path);
-  box-shadow: var(--dsw-elevation-panel);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--st-path) 20%, transparent), var(--dsw-elevation-soft);
 }
 .st-grip {
   cursor: grab;
   font-size: 11px;
   color: var(--st-muted);
+  padding: 11px 18px;
+  flex: none;
+  border-bottom: 1px solid var(--st-line);
 }
-.st-card h3 {
-  font-size: 17px;
+.st-card-meta { gap: 10px; font-size: 10px; }
+.st-question { padding: 15px 20px 16px; background: var(--dsw-alias-interactive-bg-hover); flex: none; }
+.st-role { display: inline-flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 500; color: var(--st-muted); user-select: none; }
+.st-question h3 {
+  font-size: 16px;
+  font-weight: 600;
   line-height: 1.45;
-  margin: 11px 0 13px;
+  margin: 7px 0 0;
+  max-height: 70px;
+  overflow: auto;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.st-answer-region { padding: 14px 20px 16px; min-height: 0; display: flex; flex-direction: column; }
+.st-answer-heading { display: flex; flex: none; justify-content: space-between; align-items: center; margin-bottom: 9px; }
+.st-card.sized .st-answer-region { flex: 1; overflow: hidden; }
 .st-body {
-  max-height: 116px;
-  overflow: hidden;
+  max-height: 144px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  min-height: 0;
 }
 .st-body.expanded {
-  max-height: 320px;
-  overflow: auto;
+  max-height: 440px;
 }
+.st-card.sized .st-body { flex: 1; max-height: none; }
+.st-card.overview .st-question { border-radius: 0 0 16px 16px; }
+.st .react-flow__resize-control.handle { width: 8px; height: 8px; border-radius: 3px; border-color: var(--st-bg); background: var(--st-path); }
+.st .react-flow__resize-control.line { border-color: transparent; }
+.st .react-flow__resize-control.line:hover { border-color: var(--st-path); }
 .st .st-fold,
 .st .st-quote {
   font-size: 12px;
@@ -213,6 +238,8 @@
   overflow-wrap: anywhere;
   line-height: 1.7;
 }
+.st-md a { color: var(--st-path); text-underline-offset: 3px; }
+.st-md code { font-family: var(--dsw-font-family-mono, ui-monospace, monospace); font-size: 0.9em; }
 .st-md :first-child {
   margin-top: 0;
 }
@@ -254,11 +281,16 @@
   padding: 4px 8px;
 }
 .st-composer {
+  flex: none;
   background: var(--st-soft);
-  border: 1px solid var(--st-line);
-  border-radius: 22px;
-  padding: 12px 12px 8px;
-  margin-top: 12px;
+  border: 0;
+  border-radius: var(--dsw-radius-panel, 24px);
+  padding: 8px 0 0;
+  margin: 0 12px 12px;
+  --dsw-elevation-stroke-color: var(--st-line);
+  box-shadow: var(--dsw-elevation-soft);
+  font-size: var(--dsh-content-font-size, 14px);
+  line-height: calc(24px + var(--dsh-content-font-delta, 0px));
 }
 .st-composer textarea,
 .st-capsule input {
@@ -268,15 +300,25 @@
   background: transparent;
 }
 .st-composer textarea {
-  resize: vertical;
-  min-height: 48px;
-  max-height: 120px;
+  display: block;
+  resize: none;
+  height: 50px;
+  min-height: 36px;
+  max-height: 100px;
+  padding: 4px 14px 0;
+  line-height: inherit;
+  caret-color: var(--st-path);
 }
+.st-composer textarea::placeholder { color: var(--dsw-alias-label-caption); }
+.st-composer-toolbar { padding: 8px 8px 6px; min-width: 0; flex-wrap: wrap; }
+.st-composer-leading, .st-composer-trailing { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.st-composer-trailing { margin-left: auto; }
+.st-native-controls { display: inline-flex; min-width: 0; }
 .st-composer > div {
   color: var(--st-muted);
   font-size: 11px;
 }
-.st .st-composer button,
+.st .st-composer-toolbar > div > button,
 .st .st-capsule button {
   border-radius: 50%;
   width: 29px;
@@ -285,6 +327,12 @@
   color: var(--st-pane);
   background: var(--st-ink);
   font-size: 18px;
+}
+.st .st-composer button[aria-label='发送问题'] {
+  width: 32px;
+  height: 32px;
+  background: var(--st-path);
+  color: var(--dsw-alias-label-on-primary, #fff);
 }
 .st-split {
   width: 6px;
@@ -383,7 +431,8 @@
   background: var(--st-soft);
   overflow-wrap: anywhere;
 }
-.st ::highlight(study-tree-source) {
+[data-study-canvas] ::highlight(study-tree-source),
+[data-study-canvas] ::highlight(study-tree-quote) {
   color: var(--dsw-alias-label-primary);
   background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 28%, transparent);
 }
@@ -797,25 +846,9 @@
 .st-native-reader [data-conversation-content] {
   height: 100%;
   min-width: 0;
-  --dsh-composer-height: 0px;
 }
 .st-native-reader [data-conversation-scroll] {
   min-width: 0;
-  height: 100%;
-  overflow: auto;
-}
-.st-native-reader [data-composer-seat],
-.st-native-reader [data-conversation-region='composer'] {
-  display: none !important;
-}
-.st-native-reader [data-chat-flow-kind='user'] button[aria-label*='编辑'],
-.st-native-reader [data-chat-flow-kind='user'] button[aria-label*='Edit'],
-.st-native-reader [data-chat-flow-kind='user'] button[aria-label*='重试'] {
-  display: none;
-}
-.st-native-reader button[aria-label='在新对话中分支'],
-.st-native-reader button[aria-label*='Branch'] {
-  display: none;
 }
 .st-native-start {
   font: inherit;
@@ -853,9 +886,6 @@
 }
 [data-study-canvas][data-study-reader='false'] [data-slot='main.conversation'] > :first-child {
   display: none !important;
-}
-.st-native-reader [data-conversation-scroll] {
-  padding-bottom: 20px;
 }
 .st-bar {
   background: var(--dsw-alias-bg-base);

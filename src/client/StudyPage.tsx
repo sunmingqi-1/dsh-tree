@@ -22,6 +22,10 @@ import {
   GripHorizontal,
   Network,
   ArrowUpRight,
+  MessageSquare,
+  Sparkles,
+  Quote,
+  Minimize2,
 } from 'lucide-react'
 import {
   ReactFlow,
@@ -31,6 +35,7 @@ import {
   useStore,
   useReactFlow,
   useNodesState,
+  NodeResizer,
 } from '@xyflow/react'
 import Markdown from 'react-markdown'
 import gfm from 'remark-gfm'
@@ -78,11 +83,13 @@ function Composer({ id }) {
     >
       <textarea
         aria-label="继续追问"
-        placeholder="从这里继续追问…"
+        placeholder="继续提问，沿当前节点展开学习…"
         value={draft}
         onChange={(e) => {
           setDraft(e.target.value)
           ui.saveDraft(id, e.target.value)
+          e.target.style.height = 'auto'
+          e.target.style.height = Math.min(100, e.target.scrollHeight) + 'px'
         }}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
@@ -91,7 +98,8 @@ function Composer({ id }) {
           }
         }}
       />
-      <div>
+      <div className="st-composer-toolbar">
+        <div className="st-composer-leading">
         <button
           type="button"
           className="st-add"
@@ -112,32 +120,38 @@ function Composer({ id }) {
             })
           }}
         >
-          <Plus size={17} />
+          <Quote size={16} />
         </button>
+        <span className="st-native-controls" data-study-permission-seat={id} />
+        </div>
+        <div className="st-composer-trailing">
+        <span className="st-native-controls" data-study-model-seat={id} />
         <button
           aria-label="发送问题"
           disabled={!draft.trim() || ui.busy || ui.byId.get(id)?.endSeq == null}
         >
           <ArrowUp size={16} />
         </button>
+        </div>
       </div>
     </form>
   )
 }
-function Card({ data }) {
+function Card({ data, resizing: nodeResizing }) {
   const ui = useContext(UI),
     n: Turn = data.turn
   const overview = useStore((s) => s.transform[2] < 0.6)
   const active = n.id === ui.active
+  const customSize = ui.prefs.dimensions[n.id]
   const text = ui.study.answers.get(n.id) || ''
   const expanded = !!ui.prefs.expanded[n.id]
   const excerpt = React.useMemo(() => {
-    if (expanded || text.length < 1600) return text
+    if (expanded || customSize || text.length < 1600) return text
     // Keep the first Markdown blocks intact. The expanded card and reader use the source text.
     const preview = text.slice(0, 1600)
     const cut = preview.indexOf('\n\n', 600)
     return cut > 0 ? preview.slice(0, cut) : preview
-  }, [expanded, text])
+  }, [expanded, text, customSize])
   const card = useRef<HTMLElement>(null)
   const body = useRef(null),
     [long, setLong] = useState(false)
@@ -159,20 +173,42 @@ function Card({ data }) {
   return (
     <article
       ref={card}
-      className={'st-card ' + (active ? 'active ' : '') + (ui.pathIds.has(n.id) ? 'onpath' : '')}
+      className={'st-card ' + (active ? 'active ' : '') + (customSize || nodeResizing ? 'sized ' : '') + (overview ? 'overview ' : '') + (ui.pathIds.has(n.id) ? 'onpath' : '')}
       onClick={() => ui.pick(n)}
     >
+      <NodeResizer
+        isVisible={active && !overview}
+        minWidth={420}
+        minHeight={380}
+        onResizeStart={() => { ui.resizing.current = true }}
+        onResizeEnd={(_, size) => {
+          ui.resizing.current = false
+          ui.resize(n.id, size)
+        }}
+      />
       <Handle type="target" position={Position.Top} />
       <header className="st-grip">
         <span>
           {n.parentId ? <CornerDownRight size={13} /> : <GitBranch size={13} />}{' '}
           {n.parentId ? (n.anchor ? '引用追问' : '追问') : '学习起点'}
         </span>
-        <GripHorizontal size={15} aria-hidden />
+        <span className="st-card-meta"><span>{n.status === 'sending' || n.status === 'preparing' ? '生成中' : '一轮问答'}</span><GripHorizontal size={15} aria-hidden /></span>
       </header>
-      <h3 className="nodrag">{n.question}</h3>
+      <div className="st-question nodrag nopan">
+        <span className="st-role"><MessageSquare size={13} />我的问题</span>
+        <h3>{n.question}</h3>
+      </div>
       {!overview && (
         <>
+          <div className="st-answer-region">
+          <div className="st-answer-heading">
+            <span className="st-role"><Sparkles size={13} />DSH 回答</span>
+            {customSize ? <button className="st-fold nodrag" title="恢复默认尺寸" aria-label="恢复默认尺寸" onClick={() => ui.resetSize(n.id)}><Minimize2 size={13} /></button> : text && long && (
+              <button className="st-fold nodrag" onClick={() => ui.expand(n.id, !expanded)}>
+                {expanded ? '收起' : '展开阅读'}
+              </button>
+            )}
+          </div>
           {n.anchor && (
             <button
               className="st-quote nodrag"
@@ -197,11 +233,6 @@ function Card({ data }) {
               }
             />
           </div>
-          {text && long && (
-            <button className="st-fold nodrag" onClick={() => ui.expand(n.id, !expanded)}>
-              {expanded ? '收起回答' : '展开回答'}
-            </button>
-          )}
           {n.versionOf && ui.byId.has(n.versionOf) && (
             <button
               className="st-fold nodrag"
@@ -214,6 +245,7 @@ function Card({ data }) {
             </button>
           )}
           {n.error && text && <small>{n.error}</small>}
+          </div>
           {active && <Composer key={n.id} id={n.id} />}
         </>
       )}
@@ -228,6 +260,7 @@ const emptyPrefs = () => ({
   drafts: {},
   expanded: {},
   positions: {},
+  dimensions: {},
   layoutVersions: {},
   edgeStyle: 'curve',
   views: {},
@@ -374,6 +407,8 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     flow = useRef(null),
     root = useRef(null)
   const pendingFocus = useRef<string | null>(null)
+  const [focusRevision, requestFocus] = useReducer(v => v + 1, 0)
+  const [nativeRevision, retryNative] = useReducer(v => v + 1, 0)
   const roots = React.useMemo(() => study.nodes.filter((n) => !n.parentId), [study.nodes])
   const requested = study.nodes.find((node) => node.id === study.active)
   const treeId = requested?.treeId || roots.find((n) => n.id === prefs.tree)?.id || roots[0]?.id
@@ -410,6 +445,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     if (node) {
       select(node)
       pendingFocus.current = node.id
+      requestFocus()
       setSelection(null)
     }
   }, [study.navigation])
@@ -421,8 +457,11 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
   }, [active])
   const nativeSessionId = byId.get(active)?.sessionId
   useEffect(() => {
-    if (nativeSessionId) study.showSession(nativeSessionId)
-  }, [nativeSessionId])
+    const node = byId.get(active)
+    if (!nativeSessionId) return
+    if (node.endSeq == null) { study.showSession(nativeSessionId); return }
+    return study.followNative(node)
+  }, [active, nativeSessionId, byId.get(active)?.endSeq, nativeRevision])
   useEffect(() => {
     study.hideReader = () => patch({ reader: false })
     return () => {
@@ -430,12 +469,14 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     }
   }, [study])
   const sizes = useRef<Sizes>({})
+  const resizing = useRef(false)
+  for (const [id, size] of Object.entries(prefs.dimensions)) sizes.current[id] = size
   const layoutInput = useRef({ treeId, turns })
   layoutInput.current = { treeId, turns }
   const measure = React.useCallback((id, size) => {
     const previous = sizeOf(id, sizes.current)
     sizes.current[id] = size
-    if (size.height <= previous.height + 1) return
+    if (resizing.current || (size.height <= previous.height + 1 && size.width <= previous.width + 1)) return
     setPrefs((current) => {
       const { treeId, turns } = layoutInput.current
       const stored = current.positions[treeId]
@@ -449,6 +490,15 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
           }
     })
   }, [])
+  function resize(id, size) {
+    const dimensions = { width: Math.round(size.width), height: Math.round(size.height) }
+    sizes.current[id] = dimensions
+    setPrefs(current => ({
+      ...current,
+      dimensions: { ...current.dimensions, [id]: dimensions },
+      positions: { ...current.positions, [treeId]: makeRoom(turns, { ...positions, [id]: { x: size.x, y: size.y } }, sizes.current, id) },
+    }))
+  }
   const positions = React.useMemo(
     () =>
       prefs.layoutVersions[treeId] === LAYOUT_VERSION
@@ -536,11 +586,12 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     if (!id || !positions[id] || !flow.current) return
     pendingFocus.current = null
     const { x, y } = positions[id]
-    flow.current.setCenter(x + 170, y + 150, {
+    const size = sizeOf(id, sizes.current)
+    flow.current.setCenter(x + size.width / 2, y + size.height / 2, {
       zoom: Math.max(0.92, flow.current.getZoom()),
       duration: 160,
     })
-  }, [active, positions])
+  }, [active, positions, focusRevision])
 
   useEffect(() => {
     const cancel = (e) => {
@@ -567,7 +618,8 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
       pendingFocus.current = n.id
       return
     }
-    if (p) flow.current?.setCenter(p.x + 170, p.y + 150, { zoom: 1, duration: 160 })
+    const size = sizeOf(n.id, sizes.current)
+    if (p) flow.current?.setCenter(p.x + size.width / 2, p.y + size.height / 2, { zoom: 1, duration: 160 })
   }
   function back(n) {
     const parent = byId.get(n.parentId)
@@ -606,6 +658,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     }
   }
   function capture(e, context) {
+    if (e.target.closest('.st-composer, .st-capsule')) return
     const s = window.getSelection()
     if (!s?.rangeCount || s.isCollapsed) {
       if (!e.target.closest('.st-capsule')) setSelection(null)
@@ -622,6 +675,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     setSelection({
       id: body.dataset.answer,
       anchor,
+      range: range.cloneRange(),
       x: Math.max(8, Math.min(rect.left - bounds.left, bounds.width - 286)),
       y: Math.max(8, Math.min(rect.bottom - bounds.top + 6, bounds.height - 52)),
     })
@@ -629,6 +683,15 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     if (context)
       requestAnimationFrame(() => nativeFrame.querySelector('.st-capsule input')?.focus())
   }
+  useLayoutEffect(() => {
+    // Native selection disappears when an input gains focus. A separate browser
+    // highlight keeps the exact source range visible without taking focus back.
+    const registry = CSS.highlights
+    if (!registry || !window.Highlight) return
+    registry.delete('study-tree-quote')
+    if (selection?.range) registry.set('study-tree-quote', new Highlight(selection.range))
+    return () => registry.delete('study-tree-quote')
+  }, [selection])
   const nodes = React.useMemo(
     () =>
       turns.map((n) => ({
@@ -638,8 +701,9 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
         dragHandle: '.st-grip',
         position: positions[n.id],
         selected: n.id === active,
+        style: prefs.dimensions[n.id] ? { ...prefs.dimensions[n.id] } : { width: 560 },
       })),
-    [turns, positions, active],
+    [turns, positions, active, prefs.dimensions],
   )
   const edges = React.useMemo(
     () =>
@@ -697,6 +761,13 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
         pathIds,
         busy,
         measure,
+        resizing,
+        resize,
+        resetSize: (id) => setPrefs(current => {
+          const dimensions = { ...current.dimensions }
+          delete dimensions[id]
+          return { ...current, dimensions }
+        }),
         submit,
         pick,
         focus,
@@ -830,7 +901,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
               <button
                 onClick={() => {
                   setError('')
-                  void study.refresh().catch((e) => setError(e.message))
+                  void study.refresh().then(() => retryNative()).catch((e) => setError(e.message))
                 }}
               >
                 刷新
@@ -916,6 +987,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
             },
           }}
           onQuote={(event) => capture(event, true)}
+          inputReady={byId.get(active)?.endSeq != null && study.readerTarget?.parentId === active && study.readerTarget?.sessionId === nativeSessionKey}
         />
         {selection &&
           createPortal(

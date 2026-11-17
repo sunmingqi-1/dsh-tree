@@ -2,6 +2,42 @@ import React, { useEffect, useLayoutEffect, useState, useSyncExternalStore } fro
 import { createPortal } from 'react-dom'
 import { useStudy } from './WorkspaceTree'
 import { StudyPage } from './StudyPage'
+import { controlSeat } from './nativeControls'
+
+// Reuse the host's actual model/permission controls in the card. The editor
+// itself stays independent: a Lexical editor can only own one DOM root.
+export function NativeCardControls({ study, sessionId, renderSlot }) {
+  useStudy(study)
+  const active = study.nodes.find(node => node.id === study.active)
+  const [seats, setSeats] = useState<{ permission: Element; model: Element } | null>(null)
+  useLayoutEffect(() => {
+    if (!study.enabled || !active || (active.sessionId !== sessionId && study.readerTarget?.sessionId !== sessionId)) {
+      setSeats(null)
+      return
+    }
+    const find = () => {
+      const permission = document.querySelector('[data-study-permission-seat="' + active.id + '"]')
+      const model = document.querySelector('[data-study-model-seat="' + active.id + '"]')
+      setSeats(previous => {
+        if (!permission || !model) return null
+        return previous?.permission === permission && previous?.model === model
+          ? previous : { permission, model }
+      })
+    }
+    find()
+    const observer = new MutationObserver(find)
+    observer.observe(document.body, { childList: true, subtree: true })
+    return () => observer.disconnect()
+  }, [study.enabled, active?.id, sessionId])
+  if (!seats) return null
+  const locked = active?.endSeq == null
+  return (
+    <>
+      {createPortal(renderSlot(controlSeat('conversation.input.permission'), { locked }), seats.permission)}
+      {createPortal(renderSlot(controlSeat('conversation.input.model'), { locked }), seats.model)}
+    </>
+  )
+}
 
 // Keep the real Conversation mounted in its own slot. Add only the canvas beside it.
 export function NativeFrame({ study, useSessions, usePanelInfo }) {
@@ -30,7 +66,8 @@ export function NativeFrame({ study, useSessions, usePanelInfo }) {
     else if (
       !study.nativeTarget &&
       current?.sessionId &&
-      current.sessionId !== selectedSession.id
+      current.sessionId !== selectedSession.id &&
+      study.readerTarget?.sessionId !== selectedSession.id
     ) {
       study.enabled = false
       study.emit()
@@ -64,12 +101,27 @@ export function NativeBoundary({
   width,
   readingState,
   onQuote,
+  inputReady,
 }) {
   const signature = path.map((node) => node.id + ':' + study.turnNumbers.get(node.id)).join(',')
   useLayoutEffect(() => {
     frame.dataset.studyReader = String(visible)
     frame.style.setProperty('--st-reader-width', width + 'px')
   }, [frame, visible, width])
+  useLayoutEffect(() => {
+    const native = frame.querySelector('[data-slot="main.conversation"] > :first-child')
+    if (!native) return
+    const update = () => {
+      for (const seat of native.querySelectorAll<HTMLElement>('[data-composer-seat]')) seat.inert = !inputReady
+    }
+    update()
+    const observer = new MutationObserver(update)
+    observer.observe(native, { childList: true, subtree: true })
+    return () => {
+      observer.disconnect()
+      for (const seat of native.querySelectorAll<HTMLElement>('[data-composer-seat]')) seat.inert = false
+    }
+  }, [frame, sessionKey, inputReady])
   useLayoutEffect(() => {
     const native = frame.querySelector<HTMLElement>(
       '[data-slot="main.conversation"] > :first-child',
