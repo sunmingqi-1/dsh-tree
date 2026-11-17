@@ -2,7 +2,7 @@
 
 <img src="icon.svg" width="64" alt="学习树图标" />
 
-# dsh-study-tree
+# dsh-tree
 
 ### 把一次聊天，长成一棵知识树。
 
@@ -12,7 +12,7 @@
 [![DSH](https://img.shields.io/badge/DSH-0.2.2--rc.3-64748b)](#兼容与版本)
 [![Node](https://img.shields.io/badge/Node.js-24-43853d)](#安装)
 
-[快速开始](#安装) · [使用方法](#如何使用) · [参与贡献](CONTRIBUTING.md) · [反馈问题](https://github.com/sunmingqi-1/dsh-study-tree/issues)
+[快速开始](#安装) · [使用方法](#如何使用) · [参与贡献](CONTRIBUTING.md) · [反馈问题](https://github.com/sunmingqi-1/dsh-tree/issues)
 
 </div>
 
@@ -59,15 +59,15 @@ flowchart TB
 
 当前针对 **DSH `0.2.2-rc.3`** 适配，构建使用 **Node.js 24**。其他 DSH 版本尚未承诺兼容；复用的宿主 UI 接口可能随 DSH 升级而变化。
 
-开发版的覆盖范围见该分支的[原生单轮卡片验证](https://github.com/sunmingqi-1/dsh-study-tree/blob/feat/native-turn-cards/docs/原生单轮卡片验证.md)。开发版功能不会自动进入稳定分支。
+开发版的覆盖范围见该分支的[原生单轮卡片验证](https://github.com/sunmingqi-1/dsh-tree/blob/feat/native-turn-cards/docs/原生单轮卡片验证.md)。开发版功能不会自动进入稳定分支。
 
 ## 安装
 
 先安装并运行 DeepSeek Harness，再在本地构建本插件：
 
 ```bash
-git clone --branch main https://github.com/sunmingqi-1/dsh-study-tree.git
-cd dsh-study-tree
+git clone --branch main https://github.com/sunmingqi-1/dsh-tree.git
+cd dsh-tree
 npm ci
 npm run build
 ```

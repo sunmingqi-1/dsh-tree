@@ -61,11 +61,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/sunmingqi-1/dsh-study-tree.git"
+    "url": "git+https://github.com/sunmingqi-1/dsh-tree.git"
   },
-  "homepage": "https://github.com/sunmingqi-1/dsh-study-tree#readme",
+  "homepage": "https://github.com/sunmingqi-1/dsh-tree#readme",
   "bugs": {
-    "url": "https://github.com/sunmingqi-1/dsh-study-tree/issues"
+    "url": "https://github.com/sunmingqi-1/dsh-tree/issues"
   },
   "keywords": [
     "dsh",
