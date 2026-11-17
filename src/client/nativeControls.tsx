@@ -1,10 +1,11 @@
-import React from 'react'
+import React, { useEffect, useRef } from 'react'
+import { quoteText } from './nativeDrafts'
 
 export const controlSeat = (name: string) => 'studyTree.card.' + name
 
 // DSH allows each slot to have one declaring owner. Mirror the live native
 // registrations into plugin-owned seats, retaining their components, injection,
-// locale and stores. Never redeclare a conversation.* slot or mount its editor.
+// locale and stores. Every editor gets a distinct prepared Session binding.
 // This adapter is pinned to the DSH version declared in package.json.
 export function mirrorNativeControl(ctx, source: string) {
   let stops: (() => void)[] = []
@@ -19,21 +20,49 @@ export function mirrorNativeControl(ctx, source: string) {
     previous = entries
     clear()
     for (const entry of entries) {
+      const session = source === 'conversation.composer.bar' ? ctx.slots.entries('conversation.session')[0] : null
       const children = Object.fromEntries(
         Object.entries(entry.children || {}).map(([name, spec]) => [controlSeat(name), spec]),
       )
       const Component = entry.component
-      const Adapter = (props) => (
+      const render = (props) => (
         <Component
           {...props}
-          renderSlot={(name, owner, options) => props.renderSlot(controlSeat(name), owner, options)}
+          renderSlot={(name, owner, options) => props.studySimplified && [
+            'conversation.input.permission', 'conversation.input.plan', 'conversation.input.left',
+            'conversation.input.right', 'conversation.input.model', 'conversation.input.activity',
+            'conversation.composer.dock',
+          ].includes(name) ? null : props.renderSlot(controlSeat(name), owner, options)}
           renderSlotChain={(name, owner, options) => props.renderSlotChain(controlSeat(name), owner, options)}
         />
       )
+      const Adapter = source !== 'conversation.composer.bar' ? render : function NativeInput(props) {
+        const draft = props.useInput(state => state?.draft) || ''
+        const seeded = useRef(false)
+        useEffect(() => {
+          if (!props.bindDraftPersistence || !props.inputActions || !props.actions) return
+          const off = props.bindDraftPersistence(props.actions.setDraft)
+          props.inputActions.persistDraft()
+          return off
+        }, [props.bindDraftPersistence, props.inputActions, props.actions])
+        useEffect(() => {
+          if (!props.studyAnchor || props.disabled || seeded.current || !props.inputActions) return
+          seeded.current = true
+          if (draft.replace(quoteText(props.studyAnchor.text), '').trim()) return
+          props.inputActions.insertText('\n\n请解释引用的内容。', props.inputActions.captureInsertion())
+        }, [props.disabled, props.studyAnchor, draft])
+        return render(props)
+      }
       stops.push(ctx.slots.register(
         {
           name: controlSeat(source), ...entry.options,
-          children, inject: entry.inject, store: entry.store, locale: entry.locale,
+          children,
+          inject: session ? (sessionId, actions) => ({
+            ...entry.inject(sessionId),
+            bindDraftPersistence: sessionId === undefined ? undefined : session.inject(sessionId, actions).bindDraftPersistence,
+          }) : entry.inject,
+          store: session?.store || entry.store,
+          locale: entry.locale,
         },
         Adapter,
       ))

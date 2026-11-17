@@ -7,7 +7,7 @@ export function nodeRect(node): Rect {
   return {
     ...node.position,
     width: node.width ?? node.measured?.width ?? node.style?.width ?? 560,
-    height: node.height ?? node.measured?.height ?? node.style?.height ?? 320,
+    height: node.height ?? node.measured?.height ?? node.style?.height ?? 360,
   }
 }
 

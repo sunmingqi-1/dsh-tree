@@ -1,6 +1,6 @@
 {
   "name": "dsh-study-tree",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "DeepSeek Harness 树形学习工作台",
   "private": true,
   "type": "module",

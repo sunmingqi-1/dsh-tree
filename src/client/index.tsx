@@ -1,7 +1,8 @@
 import React from 'react'
 import { Study } from './study'
 import { WorkspaceTree, NewStudyButton, useStudy } from './WorkspaceTree'
-import { NativeFrame, NativeCardControls } from './NativeFrame'
+import { NativeFrame } from './NativeFrame'
+import { NativeComposerBridge } from './NativeComposer'
 import { controlSeat, mirrorNativeControl } from './nativeControls'
 import '@xyflow/react/dist/style.css'
 import './study.css'
@@ -16,6 +17,7 @@ export const inject = [
   'workspaces',
   'uiWorkspace',
   'uiSession',
+  'conversation',
 ]
 export function apply(ctx) {
   const study = new Study(ctx)
@@ -90,14 +92,13 @@ export function apply(ctx) {
   ctx.slots.inject('conversation.session.header.actions', () =>
     ctx.slots.register(
       { name: 'conversation.session.header.actions', id: 'dsh-study-tree.new', children: {
-        [controlSeat('conversation.input.permission')]: { kind: 'single', scope: 'session' },
-        [controlSeat('conversation.input.model')]: { kind: 'single', scope: 'session' },
+        [controlSeat('conversation.composer.bar')]: { kind: 'single', scope: 'session' },
       } },
-      (props) => <><NewStudyButton study={study} sessionId={props.sessionId} /><NativeCardControls study={study} {...props} /></>,
+      (props) => <><NewStudyButton study={study} sessionId={props.sessionId} /><NativeComposerBridge study={study} {...props} /></>,
     ),
   )
   ctx.effect(() => {
-    const stops = ['conversation.input.permission', 'conversation.input.model'].map(name => mirrorNativeControl(ctx, name))
+    const stops = [mirrorNativeControl(ctx, 'conversation.composer.bar')]
     return () => stops.forEach(stop => stop())
   })
   ctx.slots.inject('conversation.hero.options', () =>
@@ -105,6 +106,7 @@ export function apply(ctx) {
       { name: 'conversation.hero.options', id: 'dsh-study-tree.new' },
       ({ sessionId }) => {
         useStudy(study)
+        if (study.creating) return null
         return (
           <button
             className="st-native-start"
@@ -113,7 +115,7 @@ export function apply(ctx) {
               else study.startNew()
             }}
           >
-            {study.creating ? '学习画布已启用' : '以学习画布开始'}
+            以学习画布开始
           </button>
         )
       },

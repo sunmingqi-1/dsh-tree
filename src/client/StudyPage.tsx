@@ -14,40 +14,31 @@ import {
   PanelRightOpen,
   PanelRightClose,
   Plus,
-  Minus,
-  Scan,
-  LocateFixed,
-  ArrowUp,
   Ellipsis,
   GripHorizontal,
-  Network,
-  ArrowUpRight,
-  MessageSquare,
-  Sparkles,
-  Quote,
   Minimize2,
+  X,
 } from 'lucide-react'
 import {
   ReactFlow,
   Handle,
   Position,
-  Panel,
-  useStore,
-  useReactFlow,
   NodeResizer,
 } from '@xyflow/react'
 import Markdown from 'react-markdown'
 import gfm from 'remark-gfm'
 import math from 'remark-math'
 import katex from 'rehype-katex'
-import { pathTo, type Anchor, type Turn } from './tree'
+import { pathTo, type Turn } from './tree'
 import { locate, selectionAt } from './selection'
-import { Study } from './study'
 import { NativeBoundary } from './NativeFrame'
 import { CanvasBackground } from './CanvasBackground'
 import { arrange, extendDown, sizeOf, LAYOUT_VERSION, type Sizes } from './layout'
 import { adaptLayout, type Rects } from './adaptive'
 import { useAdaptiveNodes } from './useAdaptiveNodes'
+import { NativeComposerSeat } from './NativeComposer'
+import { CanvasTools } from './CanvasTools'
+import { rasterPolicy } from './raster'
 
 const UI = createContext<any>(null)
 const Interaction = createContext<any>(null)
@@ -73,71 +64,15 @@ const Body = React.memo(function Body({ n, text }: { n: Turn; text: string }) {
 })
 function Composer({ id }) {
   const ui = useContext(UI)
-  const [draft, setDraft] = useState(() => ui.draft(id))
-  const send = () => ui.submit(ui.byId.get(id), draft, null)
-  return (
-    <form
-      className="st-composer nodrag nopan nowheel"
-      onSubmit={(e) => {
-        e.preventDefault()
-        send()
-      }}
-    >
-      <textarea
-        aria-label="继续追问"
-        placeholder="继续提问，沿当前节点展开学习…"
-        value={draft}
-        onChange={(e) => {
-          setDraft(e.target.value)
-          ui.saveDraft(id, e.target.value)
-          e.target.style.height = 'auto'
-          e.target.style.height = Math.min(100, e.target.scrollHeight) + 'px'
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
-            e.preventDefault()
-            send()
-          }
-        }}
-      />
-      <div className="st-composer-toolbar">
-        <div className="st-composer-leading">
-        <button
-          type="button"
-          className="st-add"
-          aria-label="引用本轮回答"
-          title="引用本轮回答"
-          onClick={(e) => {
-            const card = e.currentTarget.closest('.st-card')
-            ui.expand(id, true)
-            requestAnimationFrame(() => {
-              const body = card?.querySelector('[data-answer]')
-              if (!body?.textContent || ui.byId.get(id)?.endSeq == null) return
-              const r = new Range()
-              r.selectNodeContents(body)
-              const s = getSelection()
-              s?.removeAllRanges()
-              s?.addRange(r)
-              body.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
-            })
-          }}
-        >
-          <Quote size={16} />
-        </button>
-        <span className="st-native-controls" data-study-permission-seat={id} />
-        </div>
-        <div className="st-composer-trailing">
-        <span className="st-native-controls" data-study-model-seat={id} />
-        <button
-          aria-label="发送问题"
-          disabled={!draft.trim() || ui.busy || ui.byId.get(id)?.endSeq == null}
-        >
-          <ArrowUp size={16} />
-        </button>
-        </div>
-      </div>
-    </form>
-  )
+  const ref = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const element = ref.current, card = element?.closest<HTMLElement>('.st-card')
+    if (!element || !card) return
+    const observer = new ResizeObserver(() => card.style.setProperty('--st-composer-space', element.offsetHeight + 18 + 'px'))
+    observer.observe(element)
+    return () => { observer.disconnect(); card.style.removeProperty('--st-composer-space') }
+  }, [])
+  return <div ref={ref} className="st-card-composer"><NativeComposerSeat study={ui.study} parent={ui.byId.get(id)} /></div>
 }
 function Card({ data, resizing: nodeResizing }) {
   const ui = useContext(UI),
@@ -146,17 +81,8 @@ function Card({ data, resizing: nodeResizing }) {
   const active = n.id === ui.active
   const customSize = ui.prefs.dimensions[n.id]
   const text = ui.study.answers.get(n.id) || ''
-  const expanded = !!ui.prefs.expanded[n.id]
-  const excerpt = React.useMemo(() => {
-    if (expanded || customSize || text.length < 1600) return text
-    // Keep the first Markdown blocks intact. The expanded card and reader use the source text.
-    const preview = text.slice(0, 1600)
-    const cut = preview.indexOf('\n\n', 600)
-    return cut > 0 ? preview.slice(0, cut) : preview
-  }, [expanded, text, customSize])
   const card = useRef<HTMLElement>(null)
-  const body = useRef(null),
-    [long, setLong] = useState(false)
+  const header = useRef<HTMLElement>(null)
   useLayoutEffect(() => {
     if (!card.current) return
     const observer = new ResizeObserver(([entry]) => {
@@ -170,8 +96,11 @@ function Card({ data, resizing: nodeResizing }) {
     return () => observer.disconnect()
   }, [n.id, ui.measure])
   useLayoutEffect(() => {
-    if (body.current) setLong(excerpt !== text || body.current.scrollHeight > 118)
-  }, [text, excerpt, expanded])
+    if (!header.current || !card.current) return
+    const observer = new ResizeObserver(() => card.current?.style.setProperty('--st-head-space', header.current.offsetHeight + 24 + 'px'))
+    observer.observe(header.current)
+    return () => observer.disconnect()
+  }, [])
   return (
     <article
       ref={card}
@@ -181,35 +110,26 @@ function Card({ data, resizing: nodeResizing }) {
       <NodeResizer
         isVisible={active}
         minWidth={420}
-        minHeight={380}
+        minHeight={300}
         onResizeStart={() => interaction.begin(n.id, 'resize')}
         onResizeEnd={(_, size) => interaction.finish(n.id, size)}
       />
       <Handle type="target" position={Position.Top} />
-      <header className="st-grip">
-        <span>
+      <header className="st-card-head" ref={header}>
+        <div className="st-grip">
+        <span className="st-kind">
           {n.parentId ? <CornerDownRight size={13} /> : <GitBranch size={13} />}{' '}
           {n.parentId ? (n.anchor ? '引用追问' : '追问') : '学习起点'}
         </span>
-        <span className="st-card-meta"><span>{n.status === 'sending' || n.status === 'preparing' ? '生成中' : '一轮问答'}</span><GripHorizontal size={15} aria-hidden /></span>
-      </header>
-      <div className="st-question nodrag nopan">
-        <span className="st-role"><MessageSquare size={13} />我的问题</span>
-        <h3>{n.question}</h3>
-      </div>
-      <>
-          <div className="st-answer-region">
-          <div className="st-answer-heading">
-            <span className="st-role"><Sparkles size={13} />DSH 回答</span>
-            {customSize ? <button className="st-fold nodrag" title="恢复默认尺寸" aria-label="恢复默认尺寸" onClick={() => ui.resetSize(n.id)}><Minimize2 size={13} /></button> : text && long && (
-              <button className="st-fold nodrag" onClick={() => ui.expand(n.id, !expanded)}>
-                {expanded ? '收起' : '展开阅读'}
-              </button>
-            )}
-          </div>
+        <h3 className="st-question nodrag nopan nowheel" title={n.question}>{n.question}</h3>
+        {n.status === 'sending' || n.status === 'preparing' ? <span className="st-generating">生成中</span> : null}
+        {customSize && <button className="st-card-reset nodrag" title="恢复默认尺寸" aria-label="恢复默认尺寸" onClick={() => ui.resetSize(n.id)}><Minimize2 size={13} /></button>}
+        <GripHorizontal className="st-drag-hint" size={14} aria-hidden />
+        </div>
           {n.anchor && (
             <button
               className="st-quote nodrag"
+              title={n.anchor.text}
               onClick={(e) => {
                 e.stopPropagation()
                 ui.back(n)
@@ -218,11 +138,13 @@ function Card({ data, resizing: nodeResizing }) {
               ↖ {n.anchor.text}
             </button>
           )}
-          <div ref={body} className={'st-body ' + (expanded ? 'expanded' : '')}>
+      </header>
+          <div className="st-answer-region">
+          <div className="st-body nodrag nopan nowheel">
             <Body
               n={n}
               text={
-                excerpt ||
+                text ||
                 n.error ||
                 ui.study.issues.get(n.id) ||
                 (ui.study.answers.has(n.id) && n.status === 'complete'
@@ -245,7 +167,6 @@ function Card({ data, resizing: nodeResizing }) {
           {n.error && text && <small>{n.error}</small>}
           </div>
           {active && <Composer key={n.id} id={n.id} />}
-      </>
       <Handle type="source" position={Position.Bottom} />
     </article>
   )
@@ -287,53 +208,6 @@ function readPrefs() {
     return emptyPrefs()
   }
 }
-function CanvasTools({ focusCurrent, edgeStyle, onEdgeStyle, onArrange }) {
-  const flow = useReactFlow()
-  const zoom = useStore((s) => Math.round(s.transform[2] * 100))
-  return (
-    <Panel position="bottom-center" className="st-canvas-tools">
-      <button aria-label="缩小" onClick={() => flow.zoomOut({ duration: 120 })}>
-        <Minus size={15} />
-      </button>
-      <button title="恢复 100% 缩放" onClick={() => flow.zoomTo(1, { duration: 120 })}>
-        {zoom}%
-      </button>
-      <button aria-label="放大" onClick={() => flow.zoomIn({ duration: 120 })}>
-        <Plus size={15} />
-      </button>
-      <i />
-      <select
-        aria-label="连线方式"
-        title="连线方式"
-        value={edgeStyle}
-        onChange={(event) => onEdgeStyle(event.target.value)}
-      >
-        <option value="curve">曲线</option>
-        <option value="rounded-step">圆角折线</option>
-      </select>
-      <button
-        className="st-layout-action"
-        aria-label="自动布局"
-        title="自动布局"
-        onClick={onArrange}
-      >
-        <Network size={15} />
-        <span>自动布局</span>
-      </button>
-      <i />
-      <button aria-label="定位当前节点" title="定位当前节点" onClick={focusCurrent}>
-        <LocateFixed size={16} />
-      </button>
-      <button
-        aria-label="查看整棵树"
-        title="查看整棵树"
-        onClick={() => flow.fitView({ padding: 0.12, maxZoom: 1, duration: 180 })}
-      >
-        <Scan size={16} />
-      </button>
-    </Panel>
-  )
-}
 
 // React Flow owns live positions and measurements. Persist coordinates on pointer release.
 function Canvas({
@@ -352,16 +226,25 @@ function Canvas({
 }) {
   const { display, onNodesChange, begin, finish } = useAdaptiveNodes(nodes, onCommit, interacting)
   const interaction = React.useMemo(() => ({ begin, finish }), [begin, finish])
+  const canvas = useRef<HTMLDivElement>(null), layer = useRef<HTMLElement>(null)
+  const raster = useRef(null)
+  if (!raster.current) raster.current = rasterPolicy(() => {
+    if (!layer.current?.isConnected) layer.current = canvas.current?.querySelector('.react-flow__viewport') || null
+    return layer.current
+  }, view.zoom)
   return (
     <Interaction.Provider value={interaction}>
     <ReactFlow
+      ref={canvas}
       proOptions={{ hideAttribution: true }}
       nodes={display}
       edges={edges}
       nodeTypes={nodeTypes}
       defaultViewport={view}
       onInit={onInit}
-      onMoveEnd={(_, v) => onView(v)}
+      onMoveStart={event => raster.current.start(event)}
+      onMove={(_, view) => raster.current.change(view)}
+      onMoveEnd={(_, view) => { raster.current.end(view); onView(view) }}
       onPaneClick={onBlank}
       onNodesChange={onNodesChange}
       onNodeDragStart={(_, node) => begin(node.id, 'drag')}
@@ -386,8 +269,7 @@ function Canvas({
 export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
   const [, redraw] = useReducer((v) => v + 1, 0),
     [prefs, setPrefs] = useState(readPrefs)
-  const [selection, setSelection] = useState(null),
-    [question, setQuestion] = useState('')
+  const [selection, setSelection] = useState(null)
   const [error, setError] = useState(''),
     [busy, setBusy] = useState(false)
   const [editing, setEditing] = useState(null)
@@ -456,14 +338,17 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     }
   }, [study])
   const sizes = useRef<Sizes>({})
+  const measured = useRef(new Set<string>())
   const interacting = useRef(false)
   for (const [id, size] of Object.entries(prefs.dimensions)) sizes.current[id] = size
   const layoutInput = useRef({ treeId, turns })
   layoutInput.current = { treeId, turns }
   const measure = React.useCallback((id, size) => {
+    const first = !measured.current.has(id)
+    measured.current.add(id)
     const previous = sizeOf(id, sizes.current)
     sizes.current[id] = size
-    if (interacting.current || (Math.abs(size.height - previous.height) < 1 && Math.abs(size.width - previous.width) < 1)) return
+    if (interacting.current || (!first && Math.abs(size.height - previous.height) < 1 && Math.abs(size.width - previous.width) < 1)) return
     setPrefs((current) => {
       const { treeId, turns } = layoutInput.current
       const stored = current.positions[treeId]
@@ -640,10 +525,10 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     }
   }
   function capture(e, context) {
-    if (e.target.closest('.st-composer, .st-capsule')) return
+    if (e.target.closest('.st-native-composer, .st-quote-popover')) return
     const s = window.getSelection()
     if (!s?.rangeCount || s.isCollapsed) {
-      if (!e.target.closest('.st-capsule')) setSelection(null)
+      if (!e.target.closest('.st-quote-popover')) setSelection(null)
       return
     }
     const range = s.getRangeAt(0),
@@ -658,12 +543,10 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
       id: body.dataset.answer,
       anchor,
       range: range.cloneRange(),
-      x: Math.max(8, Math.min(rect.left - bounds.left, bounds.width - 286)),
-      y: Math.max(8, Math.min(rect.bottom - bounds.top + 6, bounds.height - 52)),
+      focus: context,
+      x: Math.max(8, Math.min(rect.left - bounds.left, bounds.width - 420)),
+      y: Math.max(8, Math.min(rect.bottom - bounds.top + 8, bounds.height - 220)),
     })
-    setQuestion('')
-    if (context)
-      requestAnimationFrame(() => nativeFrame.querySelector('.st-capsule input')?.focus())
   }
   useLayoutEffect(() => {
     // Native selection disappears when an input gains focus. A separate browser
@@ -683,7 +566,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
         dragHandle: '.st-grip',
         position: positions[n.id],
         selected: n.id === active,
-        style: prefs.dimensions[n.id] ? { ...prefs.dimensions[n.id] } : { width: 560 },
+        style: prefs.dimensions[n.id] ? { ...prefs.dimensions[n.id] } : { width: 560, height: 360 },
       })),
     [turns, positions, active, prefs.dimensions],
   )
@@ -761,7 +644,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
         className="st"
         ref={root}
         onMouseUp={(e) => {
-          if (!e.target.closest('.st-capsule')) capture(e, false)
+          if (!e.target.closest('.st-quote-popover, .st-native-composer')) capture(e, false)
         }}
         onContextMenuCapture={(e) => {
           if (e.target.closest('[data-answer]')) {
@@ -977,30 +860,15 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
         />
         {selection &&
           createPortal(
-            <form
-              className="st-capsule"
+            <div
+              className="st-quote-popover"
+              role="dialog"
+              aria-label="引用追问"
               style={{ left: selection.x, top: selection.y }}
-              onSubmit={(e) => {
-                e.preventDefault()
-                void submit(byId.get(selection.id), question, selection.anchor)
-              }}
             >
-              <input
-                placeholder="添加可选问题…"
-                aria-label="引用追问"
-                value={question}
-                onChange={(e) => setQuestion(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && e.nativeEvent.isComposing) e.preventDefault()
-                }}
-              />
-              <button
-                disabled={busy || byId.get(selection.id)?.endSeq == null}
-                aria-label="发送引用追问"
-              >
-                <ArrowUp size={16} />
-              </button>
-            </form>,
+              <div className="st-quote-caption"><span>引用追问</span><button type="button" aria-label="取消引用追问" onClick={() => setSelection(null)}><X size={14} /></button></div>
+              <NativeComposerSeat study={study} parent={byId.get(selection.id)} kind="quote" anchor={selection.anchor} focus={selection.focus} />
+            </div>,
             nativeFrame,
           )}
       </section>

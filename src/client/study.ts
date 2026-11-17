@@ -1,5 +1,7 @@
 import { readTurn, type Turn, type Anchor } from './tree'
+import { NativeDrafts } from './nativeDrafts'
 export class Study {
+  composers = new NativeDrafts(this)
   version = 0
   enabled = false
   creating = false
@@ -171,6 +173,7 @@ export class Study {
     this.issues.clear()
     this.loaded = true
     this.error = ''
+    await this.composers.recover()
     this.emit()
   }
   merge(node: Turn) {
@@ -475,6 +478,7 @@ export class Study {
   }
   dispose() {
     this.closing = true
+    this.composers.dispose()
     this.pendingStop()
     for (const stop of [...this.watches.values()]) stop()
     this.listeners.clear()

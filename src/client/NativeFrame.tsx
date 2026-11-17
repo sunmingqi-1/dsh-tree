@@ -2,42 +2,6 @@ import React, { useEffect, useLayoutEffect, useState, useSyncExternalStore } fro
 import { createPortal } from 'react-dom'
 import { useStudy } from './WorkspaceTree'
 import { StudyPage } from './StudyPage'
-import { controlSeat } from './nativeControls'
-
-// Reuse the host's actual model/permission controls in the card. The editor
-// itself stays independent: a Lexical editor can only own one DOM root.
-export function NativeCardControls({ study, sessionId, renderSlot }) {
-  useStudy(study)
-  const active = study.nodes.find(node => node.id === study.active)
-  const [seats, setSeats] = useState<{ permission: Element; model: Element } | null>(null)
-  useLayoutEffect(() => {
-    if (!study.enabled || !active || (active.sessionId !== sessionId && study.readerTarget?.sessionId !== sessionId)) {
-      setSeats(null)
-      return
-    }
-    const find = () => {
-      const permission = document.querySelector('[data-study-permission-seat="' + active.id + '"]')
-      const model = document.querySelector('[data-study-model-seat="' + active.id + '"]')
-      setSeats(previous => {
-        if (!permission || !model) return null
-        return previous?.permission === permission && previous?.model === model
-          ? previous : { permission, model }
-      })
-    }
-    find()
-    const observer = new MutationObserver(find)
-    observer.observe(document.body, { childList: true, subtree: true })
-    return () => observer.disconnect()
-  }, [study.enabled, active?.id, sessionId])
-  if (!seats) return null
-  const locked = active?.endSeq == null
-  return (
-    <>
-      {createPortal(renderSlot(controlSeat('conversation.input.permission'), { locked }), seats.permission)}
-      {createPortal(renderSlot(controlSeat('conversation.input.model'), { locked }), seats.model)}
-    </>
-  )
-}
 
 // Keep the real Conversation mounted in its own slot. Add only the canvas beside it.
 export function NativeFrame({ study, useSessions, usePanelInfo }) {
