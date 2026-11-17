@@ -1,7 +1,22 @@
-import { readTurn, type Turn, type Anchor } from './tree'
+import { readTurn, isUserPrompt, type Turn, type Anchor } from './tree'
 import { NativeDrafts } from './nativeDrafts'
+import { NativeTurns, NativeInteractions } from './nativeState'
 export class Study {
   composers = new NativeDrafts(this)
+  turns = new NativeTurns()
+  interactions = new NativeInteractions(this)
+  private answerSources = new Map<string, any>()
+  answerSource(id: string) {
+    if (!this.answerSources.has(id)) {
+      const listeners = new Set<() => void>()
+      this.answerSources.set(id, {
+        subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener) },
+        getSnapshot: () => this.answers.get(id) || '',
+        emit: () => { for (const listener of listeners) listener() },
+      })
+    }
+    return this.answerSources.get(id)
+  }
   version = 0
   enabled = false
   creating = false
@@ -70,7 +85,7 @@ export class Study {
           const message = binding.eventSource
             .getSnapshot()
             .entries.find(
-              ({ event }) => event.type === 'user/message' && event.data.source?.rpcId,
+              ({ event }) => isUserPrompt(event),
             )?.event
           if (!message) return
           saving = true
@@ -303,7 +318,7 @@ export class Study {
       const read = () => {
         if (stopped || !this.enabled) return
         const message = binding.eventSource.getSnapshot().entries.find(({ event }) =>
-          event.type === 'user/message' && event.seq > baseline && event.data.source?.rpcId,
+          isUserPrompt(event) && event.seq > baseline,
         )?.event
         if (!message || this.nodes.some(n => n.sessionId === sessionId && n.requestId === message.data.source.rpcId)) return
         const requestId = message.data.source.rpcId
@@ -421,7 +436,10 @@ export class Study {
           for (const { event } of entries) {
             if (event.type === 'turn/start') turnNumber = event.data.turn
             if (event.type === 'user/message' && event.data.source?.rpcId === n.requestId) {
-              if (turnNumber !== undefined) this.turnNumbers.set(n.id, turnNumber)
+              if (turnNumber !== undefined && this.turnNumbers.get(n.id) !== turnNumber) {
+                this.turnNumbers.set(n.id, turnNumber)
+                this.emit()
+              }
               break
             }
           }
@@ -462,7 +480,7 @@ export class Study {
                 }
               })
           }
-          this.emit()
+          this.answerSource(n.id).emit()
         }
         // Coalesce stream tokens before folding history and parsing Markdown.
         off = binding.eventSource.subscribe(() => {

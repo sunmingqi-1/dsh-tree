@@ -5,6 +5,8 @@ import { WorkspaceTree, NewStudyButton, useStudy } from './WorkspaceTree'
 import { NativeFrame } from './NativeFrame'
 import { NativeComposerBridge } from './NativeComposer'
 import { controlSeat, mirrorNativeControl } from './nativeControls'
+import { NativeTurnBridge, installNativeTurns, nativeTurnSpec, turnSeat } from './NativeTurn'
+import { installNativeInteractions } from './NativeInteraction'
 import '@xyflow/react/dist/style.css'
 import './study.css'
 
@@ -19,6 +21,7 @@ export const inject = [
   'uiWorkspace',
   'uiSession',
   'conversation',
+  'uiConversation',
 ]
 export function apply(ctx) {
   const study = new Study(ctx)
@@ -30,7 +33,7 @@ export function apply(ctx) {
       study.emit()
     })
   refresh()
-  ctx.on('connection/reset', refresh)
+  ctx.on('connection/reset', () => { study.turns.reconnect++; study.turns.emit(); refresh() })
   ctx.effect(() => ctx.workspaces.list.subscribe(() => study.emit()))
   ctx.effect(() => {
     window.addEventListener('focus', refresh)
@@ -94,12 +97,13 @@ export function apply(ctx) {
     ctx.slots.register(
       { name: 'conversation.session.header.actions', id: 'dsh-study-tree.new', children: {
         [controlSeat('conversation.composer.bar')]: { kind: 'single', scope: 'session' },
+        [turnSeat]: nativeTurnSpec(ctx),
       } },
-      (props) => <><NewStudyButton study={study} sessionId={props.sessionId} /><NativeComposerBridge study={study} {...props} /></>,
+      (props) => <><NewStudyButton study={study} sessionId={props.sessionId} /><NativeComposerBridge study={study} {...props} /><NativeTurnBridge study={study} {...props} /></>,
     ),
   )
   ctx.effect(() => {
-    const stops = [mirrorNativeControl(ctx, 'conversation.composer.bar')]
+    const stops = [mirrorNativeControl(ctx, 'conversation.composer.bar'), installNativeTurns(ctx), installNativeInteractions(ctx, study)]
     return () => stops.forEach(stop => stop())
   })
   ctx.slots.inject('conversation.hero.options', () =>

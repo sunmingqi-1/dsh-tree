@@ -2,12 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { applyNodeChanges } from '@xyflow/react'
 import { adaptLayout, type Rect, type Rects } from './adaptive'
 import type { Positions } from './layout'
+import { DEFAULT_CARD_SIZE } from './cardSize.ts'
 
 export function nodeRect(node): Rect {
   return {
     ...node.position,
-    width: node.width ?? node.measured?.width ?? node.style?.width ?? 560,
-    height: node.height ?? node.measured?.height ?? node.style?.height ?? 360,
+    width: node.width ?? node.measured?.width ?? node.style?.width ?? DEFAULT_CARD_SIZE.width,
+    height: node.height ?? node.measured?.height ?? node.style?.height ?? DEFAULT_CARD_SIZE.height,
   }
 }
 

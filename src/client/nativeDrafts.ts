@@ -1,4 +1,4 @@
-import type { Anchor, Turn } from './tree'
+import { isUserPrompt, type Anchor, type Turn } from './tree'
 
 export const quoteText = (text: string) => text.replace(/\r\n?/g, '\n').split('\n').map(line => '> ' + line).join('\n')
 export function nativeQuestion(text: string, anchor: Anchor | null) {
@@ -102,7 +102,7 @@ export class NativeDrafts {
       const read = () => {
         if (stopped || saving) return
         const message = binding.eventSource.getSnapshot().entries.find(({ event }) =>
-          event.type === 'user/message' && event.seq > parent.endSeq && event.data.source?.rpcId,
+          isUserPrompt(event) && event.seq > parent.endSeq,
         )?.event
         if (!message) { if (!mounted && !busy()) stop(); return }
         if (this.study.nodes.some(n => n.sessionId === sessionId && n.requestId === message.data.source.rpcId)) { stop(); return }

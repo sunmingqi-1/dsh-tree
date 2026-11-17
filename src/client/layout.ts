@@ -1,16 +1,16 @@
 import dagre from '@dagrejs/dagre'
 import type { Turn } from './tree'
+import { DEFAULT_CARD_SIZE } from './cardSize.ts'
 
 type Node = Pick<Turn, 'id' | 'parentId'>
 export type Positions = Record<string, { x: number; y: number }>
 export type Sizes = Record<string, { width: number; height: number }>
 export const LAYOUT_VERSION = 2
-const FALLBACK = { width: 560, height: 360 }
 const COLUMN_GAP = 72
 const ROW_GAP = 88
 
 export function sizeOf(id: string, sizes: Sizes) {
-  return sizes[id] || FALLBACK
+  return sizes[id] || DEFAULT_CARD_SIZE
 }
 
 export function arrange(nodes: Node[], sizes: Sizes = {}): Positions {

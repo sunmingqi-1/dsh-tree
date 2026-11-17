@@ -9,7 +9,7 @@ const result = await build({
   platform: 'browser',
   target: 'es2022',
   minify: true,
-  external: ['react', 'react-dom', 'react/jsx-runtime'],
+  external: ['react', 'react-dom', 'react/jsx-runtime', '@deepseek-ai/dsh-client-ui-primitives'],
   define: { 'process.env.NODE_ENV': '"production"' },
 })
 const js = result.outputFiles.find((f) => f.path.endsWith('.js')).text

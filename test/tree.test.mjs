@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readTurn, pathTo } from '../src/client/tree.ts'
+import { readTurn, pathTo, isUserPrompt } from '../src/client/tree.ts'
 
 test('兄弟分支使用相同轮号时，阅读区仍只显示选中的祖先', () => {
   const records = [
@@ -17,6 +17,14 @@ test('兄弟分支使用相同轮号时，阅读区仍只显示选中的祖先',
     pathTo(records, 'aa').map((n) => n.id),
     ['root', 'a', 'aa'],
   )
+})
+
+test('原生问题答复和工具消息即使带rpcId也不成为新的学习子节点', () => {
+  const event = kind => ({ type: 'user/message', data: { source: { kind, rpcId: 'reply' } } })
+  assert.equal(isUserPrompt(event('user-question-reply')), false)
+  assert.equal(isUserPrompt(event('tool')), false)
+  assert.equal(isUserPrompt(event('user')), true)
+  assert.equal(isUserPrompt(event(undefined)), true)
 })
 
 test('会话继承历史和之后的输入都不进入本节点，使用持久化的结束序号分叉', () => {
