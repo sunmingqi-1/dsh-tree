@@ -1055,6 +1055,7 @@ div:has(> div > [data-slot='conversation.hero.options'] > .st-native-start) {
 .st-quote-caption { display: flex; align-items: center; justify-content: space-between; padding: 4px 5px 5px; color: var(--st-muted); font-size: 11px; }
 .st-quote-caption button { display: grid; place-items: center; cursor: pointer; border: 0; border-radius: 6px; padding: 4px; background: transparent; color: inherit; }
 .st-quote-caption button:hover { background: var(--st-soft); }
+.st-quote-popover:not(:has([data-composer-input])):not(:has([role='alert'])) { visibility: hidden; pointer-events: none; }
 
 .st .st-canvas-tools {
   gap: 4px;

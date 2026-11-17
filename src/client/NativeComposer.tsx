@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { useStudy } from './WorkspaceTree'
 import { controlSeat } from './nativeControls'
@@ -10,8 +10,8 @@ export function NativeComposerSeat({ study, parent, kind = 'card', anchor = null
     const seat = ref.current
     const request = { key: crypto.randomUUID(), parent, kind, anchor, focus }
     study.composers.seats.set(seat, request)
-    study.emit()
-    return () => { study.composers.seats.delete(seat); study.emit() }
+    study.composers.emit()
+    return () => { study.composers.seats.delete(seat); study.composers.emit() }
   }, [study, parent?.id, parent?.endSeq, kind, anchor?.start, anchor?.text, focus])
   return <div ref={ref} className={'st-native-composer nodrag nopan nowheel ' + (kind === 'quote' ? 'simplified' : '')} data-study-composer={kind} />
 }
@@ -19,12 +19,15 @@ export function NativeComposerSeat({ study, parent, kind = 'card', anchor = null
 function NativeComposerPortal({ study, seat, request, SessionProvider, renderSlot }) {
   const [reference, setReference] = useState(null), [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
+  useEffect(() => request.kind === 'card' ? study.composers.warmQuote(request.parent) : undefined,
+    [study, request.key])
   useEffect(() => study.composers.mount(request, setReference, setError), [study, request.key, retry])
   useEffect(() => {
     if (!reference || request.kind !== 'quote' || !request.focus) return
     const timer = requestAnimationFrame(() => seat.querySelector<HTMLElement>('[data-composer-input]')?.focus())
     return () => cancelAnimationFrame(timer)
   }, [reference])
+  if (!reference && request.kind === 'quote' && !error) return null
   if (!reference) return createPortal(
     <div className="st-native-preparing" role={error ? 'alert' : 'status'}>
       {error || (request.parent.endSeq == null ? '等待当前回答结束…' : '正在准备输入框…')}
@@ -48,6 +51,7 @@ function NativeComposerPortal({ study, seat, request, SessionProvider, renderSlo
 
 export function NativeComposerBridge({ study, sessionId, SessionProvider, renderSlot }) {
   useStudy(study)
+  useSyncExternalStore(study.composers.subscribe, study.composers.getSnapshot)
   if (!study.enabled || study.ctx.uiSession.adapter.current.getSnapshot().key !== sessionId) return null
   return <>{[...study.composers.seats].map(([seat, request]) => (
     <NativeComposerPortal key={request.key} {...{ study, seat, request, SessionProvider, renderSlot }} />

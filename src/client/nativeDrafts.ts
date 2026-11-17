@@ -10,6 +10,17 @@ export function nativeQuestion(text: string, anchor: Anchor | null) {
 
 export class NativeDrafts {
   seats = new Map<HTMLElement, { key: string; parent: Turn; kind: 'card' | 'quote'; anchor: Anchor | null }>()
+  private listeners = new Set<() => void>()
+  private version = 0
+  subscribe = listener => { this.listeners.add(listener); return () => this.listeners.delete(listener) }
+  getSnapshot = () => this.version
+  emit() { this.version++; for (const listener of this.listeners) listener() }
+  private quotePools = new Map<string, any>()
+  private quotePoolRefs = new Set<any>()
+  private quoteAttachments = new Map<string, readonly string[]>()
+  private quoteDrafts: Record<string, any> = (() => {
+    try { return JSON.parse(localStorage.getItem('dsh-study-tree:quote-drafts') || '{}') } catch { return {} }
+  })()
   sessions: Record<string, string> = (() => {
     try { return JSON.parse(localStorage.getItem('dsh-study-tree:composer-drafts') || '{}') } catch { return {} }
   })()
@@ -23,6 +34,56 @@ export class NativeDrafts {
     try { return JSON.parse(localStorage.getItem('dsh-study-tree:native-submissions') || '{}') } catch { return {} }
   })()
   constructor(readonly study: any) {}
+
+  private acquireQuote(parent: Turn) {
+    let pool = this.quotePools.get(parent.id)
+    const busy = pool?.input && (pool.used || pool.input.state.getSnapshot().phase !== 'plain'
+      || pool.binding.session.getSnapshot().pendingSubmissions.length > 0)
+    if (!pool || busy) {
+      if (busy) delete this.sessions[JSON.stringify([parent.id, 'quote', undefined, undefined])]
+      pool = { users: 0, closed: false, reference: null, input: null, binding: null, anchorKey: null }
+      const current = pool
+      pool.close = () => {
+        if (current.closed) return
+        current.closed = true
+        current.reference?.release()
+        this.quotePoolRefs.delete(current)
+        if (this.quotePools.get(parent.id) === current) this.quotePools.delete(parent.id)
+      }
+      this.quotePools.set(parent.id, pool)
+      this.quotePoolRefs.add(pool)
+      pool.ready = this.session(parent, 'quote', null).then(async sessionId => {
+        if (current.closed) throw new Error('划词输入已关闭')
+        current.reference = this.study.ctx.sessions.retain(sessionId, { source: 'studyTree' })
+        current.binding = await current.reference.ready
+        if (current.closed) throw new Error('划词输入已关闭')
+        current.input = this.study.ctx.conversation.input.for(current.binding.ctx)
+        return current
+      }).catch(error => { current.close(); throw error })
+    }
+    pool.users++
+    const current = pool
+    let released = false
+    return { ready: pool.ready, release: () => {
+      if (released) return
+      released = true
+      if (--current.users === 0) current.close()
+    } }
+  }
+
+  warmQuote(parent: Turn) {
+    if (parent.endSeq == null || !parent.sessionId) return () => {}
+    const lease = this.acquireQuote(parent)
+    void lease.ready.catch(() => {})
+    return lease.release
+  }
+
+  private rememberQuote(pool) {
+    if (!pool?.anchorKey || !pool.input) return
+    this.quoteDrafts[pool.anchorKey] = pool.input.draftSnapshot || pool.input.state.getSnapshot().draft
+    this.quoteAttachments.set(pool.anchorKey, [...(pool.input.state.getSnapshot().attachmentIds || [])])
+    try { localStorage.setItem('dsh-study-tree:quote-drafts', JSON.stringify(this.quoteDrafts)) } catch {}
+  }
 
   private persistSubmissions() {
     try { localStorage.setItem('dsh-study-tree:native-submissions', JSON.stringify(this.submissions)) } catch {}
@@ -73,23 +134,40 @@ export class NativeDrafts {
   mount(request, ready: (reference: any) => void, failed: (message: string) => void) {
     const { parent, kind, anchor } = request
     if (parent.endSeq == null || !parent.sessionId) return () => {}
-    let mounted = true, stopped = false, saving = false, reference, input, binding
+    let mounted = true, stopped = false, saving = false, reference, input, binding, quotePool, quoteLease
     let offEvents = () => {}, offInput = () => {}
     const stop = () => {
       if (stopped) return
       stopped = true
-      offEvents(); offInput(); reference?.release()
+      offEvents(); offInput()
+      if (quoteLease) { this.rememberQuote(quotePool); quoteLease.release() }
+      else reference?.release()
       this.stops.delete(stop)
     }
     const busy = () => saving || (input && input.state.getSnapshot().phase !== 'plain')
       || binding?.session.getSnapshot().pendingSubmissions.length > 0
     this.stops.add(stop)
-    void this.session(parent, kind, anchor).then(async sessionId => {
+    const prepare = kind === 'quote' ? (quoteLease = this.acquireQuote(parent)).ready.then(pool => {
+      quotePool = pool
+      return pool.reference.sessionId
+    }) : this.session(parent, kind, anchor)
+    void prepare.then(async sessionId => {
       if (stopped) return
-      reference = this.study.ctx.sessions.retain(sessionId, { source: 'studyTree' })
+      reference = quotePool?.reference || this.study.ctx.sessions.retain(sessionId, { source: 'studyTree' })
       binding = await reference.ready
       if (stopped) return
       input = this.study.ctx.conversation.input.for(binding.ctx)
+      if (quotePool) {
+        const anchorKey = JSON.stringify([parent.id, kind, anchor?.start, anchor?.text])
+        if (quotePool.anchorKey !== anchorKey) {
+          this.rememberQuote(quotePool)
+          quotePool.anchorKey = anchorKey
+          for (const id of [...(input.state.getSnapshot().attachmentIds || [])]) input.removeAttachment?.(id)
+          input.setDraft(this.quoteDrafts[anchorKey] || '')
+          const attachments = this.quoteAttachments.get(anchorKey)
+          if (attachments?.length) input.addAttachments?.(attachments)
+        }
+      }
       if (kind === 'card' && !this.migrated.has(parent.id)) {
         try {
           const legacy = JSON.parse(localStorage.getItem('dsh-study-tree:view:v1') || '{}').drafts?.[parent.id]
@@ -110,6 +188,7 @@ export class NativeDrafts {
         if (this.accepting.has(submission)) return
         this.accepting.add(submission)
         saving = true
+        if (quotePool) quotePool.used = true
         request.sent = true
         this.study.emit()
         const text = message.data.content.filter(part => part.type === 'text').map(part => part.text).join('\n')
@@ -139,5 +218,9 @@ export class NativeDrafts {
       if (!busy()) stop()
     }
   }
-  dispose() { for (const stop of [...this.stops]) stop(); this.seats.clear() }
+  dispose() {
+    for (const stop of [...this.stops]) stop()
+    for (const pool of this.quotePoolRefs) pool.close()
+    this.quotePools.clear(); this.seats.clear(); this.listeners.clear()
+  }
 }

@@ -20,7 +20,10 @@ function fixture() {
     const input = {
       state: { getSnapshot: () => state, subscribe: fn => { inputListeners.add(fn); return () => inputListeners.delete(fn) } },
       insertQuote: text => { state.draft = quoteText(text) + ' ' },
-      setDraft: text => { state.draft = text },
+      setDraft: text => { state.draft = typeof text === 'string' ? text : text.text },
+      get draftSnapshot() { return { text: state.draft, references: [] } },
+      addAttachments: ids => { state.attachmentIds = [...state.attachmentIds, ...ids] },
+      removeAttachment: id => { state.attachmentIds = state.attachmentIds.filter(item => item !== id) },
     }
     const result = { ctx: { id }, input, session: { loadThrough: async () => {}, getSnapshot: () => ({ pendingSubmissions: [] }) }, eventSource: {
       getSnapshot: () => ({ entries }), subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn) },
@@ -68,6 +71,62 @@ test('卡片和划词编辑器使用不同会话，不共享 Lexical root 或草
   assert.equal(card.binding().input.state.getSnapshot().draft, '卡片草稿')
   assert.match(quote.binding().input.state.getSnapshot().draft, /> 工具/)
   card.stop(); quote.stop(); assert.equal(f.held(), 0)
+})
+
+test('预备划词输入后，反复更换选区不再创建或释放会话，也不刷新全局目录', async () => {
+  const f = fixture(), card = f.mount()
+  await tick()
+  const stopWarm = f.drafts.warmQuote(f.parent)
+  await tick()
+  const forks = f.forks.length, held = f.held()
+  let globalUpdates = 0
+  f.study.emit = () => { globalUpdates++ }
+  const a = { text: '模型', start: 0, prefix: '', suffix: '' }
+  const b = { text: '工具', start: 8, prefix: '', suffix: '' }
+  const first = f.mount('quote', a)
+  await tick()
+  const id = first.reference().sessionId
+  first.binding().input.setDraft(quoteText(a.text) + '\n\n还没发送的问题')
+  first.binding().input.addAttachments(['file-a'])
+  first.stop()
+  const second = f.mount('quote', b)
+  await tick()
+  assert.equal(second.reference().sessionId, id)
+  assert.equal(second.binding().input.state.getSnapshot().draft.includes('还没发送的问题'), false)
+  assert.match(second.binding().input.state.getSnapshot().draft, /> 工具/)
+  assert.deepEqual(second.binding().input.state.getSnapshot().attachmentIds, [])
+  second.stop()
+  const restored = f.mount('quote', a)
+  await tick()
+  assert.match(restored.binding().input.state.getSnapshot().draft, /还没发送的问题/)
+  assert.deepEqual(restored.binding().input.state.getSnapshot().attachmentIds, ['file-a'])
+  restored.stop()
+  assert.equal(f.forks.length, forks)
+  assert.equal(f.held(), held)
+  assert.equal(globalUpdates, 0)
+  card.stop(); stopWarm()
+  assert.equal(f.held(), 0)
+})
+
+test('划词发送尚未接收时，新选区使用另一条草稿通道，后台接收不抢选择', async () => {
+  const f = fixture(), stopWarm = f.drafts.warmQuote(f.parent)
+  await tick()
+  const first = f.mount('quote', { text: '模型', start: 0, prefix: '', suffix: '' })
+  await tick()
+  const original = first.binding()
+  original.input.state.getSnapshot().phase = 'sending'
+  first.stop()
+  const second = f.mount('quote', { text: '工具', start: 8, prefix: '', suffix: '' })
+  await tick()
+  assert.notEqual(second.reference().sessionId, first.reference().sessionId)
+  original.add({ type: 'user/message', seq: 4, data: { source: { kind: 'user', rpcId: 'first-quote' }, content: [{ type: 'text', text: '> 模型\n\n为什么？' }] } })
+  await tick()
+  assert.equal(f.study.nodes.length, 1)
+  assert.equal(f.study.nodes[0].anchor.text, '模型')
+  assert.deepEqual(f.opened, [])
+  assert.match(second.binding().input.state.getSnapshot().draft, /> 工具/)
+  second.stop(); stopWarm()
+  assert.equal(f.held(), 0)
 })
 
 test('已被原生 DSH 接受的消息只建一个节点，保留问题与引用来源', async () => {
