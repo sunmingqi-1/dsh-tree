@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { arrange, extendDown, makeRoom } from '../src/client/layout.ts'
+import { arrange, extendDown } from '../src/client/layout.ts'
+import { adaptLayout } from '../src/client/adaptive.ts'
 
 const tree = [
   { id: 'root', parentId: null },
@@ -51,7 +52,8 @@ test('新增追问向下放置，并排避让，保留原来的手动位置', ()
 test('长回答展开为下方节点让位，保持列坐标并避免连续后代重叠', () => {
   const stored = arrange(tree, sizes)
   const grown = { ...sizes, root: { width: 340, height: 1600 } }
-  const positions = makeRoom(tree, stored, grown, 'root')
+  const base = Object.fromEntries(tree.map(n => [n.id, { ...stored[n.id], ...sizes[n.id] }]))
+  const positions = adaptLayout(base, 'root', { ...stored.root, ...grown.root })
   for (const node of tree) {
     assert.equal(positions[node.id].x, stored[node.id].x)
     assert.ok(positions[node.id].y >= stored[node.id].y)
@@ -59,6 +61,7 @@ test('长回答展开为下方节点让位，保持列坐标并避免连续后�
       assert.ok(positions[node.id].y >= positions[node.parentId].y + grown[node.parentId].height)
   }
   assert.deepEqual(positions.root, stored.root)
-  assert.equal(makeRoom(tree, positions, grown, 'root'), positions)
-  assert.equal(makeRoom(tree, positions, sizes, 'missing'), positions)
+  const settled = Object.fromEntries(tree.map(n => [n.id, { ...positions[n.id], ...grown[n.id] }]))
+  assert.deepEqual(adaptLayout(settled, 'root', settled.root), positions)
+  assert.deepEqual(adaptLayout(settled, 'missing', settled.root), positions)
 })

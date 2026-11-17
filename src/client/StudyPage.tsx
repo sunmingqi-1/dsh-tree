@@ -34,7 +34,6 @@ import {
   Panel,
   useStore,
   useReactFlow,
-  useNodesState,
   NodeResizer,
 } from '@xyflow/react'
 import Markdown from 'react-markdown'
@@ -46,9 +45,12 @@ import { locate, selectionAt } from './selection'
 import { Study } from './study'
 import { NativeBoundary } from './NativeFrame'
 import { CanvasBackground } from './CanvasBackground'
-import { arrange, extendDown, makeRoom, sizeOf, LAYOUT_VERSION, type Sizes } from './layout'
+import { arrange, extendDown, sizeOf, LAYOUT_VERSION, type Sizes } from './layout'
+import { adaptLayout, type Rects } from './adaptive'
+import { useAdaptiveNodes } from './useAdaptiveNodes'
 
 const UI = createContext<any>(null)
+const Interaction = createContext<any>(null)
 const states = {
   preparing: '正在创建会话',
   sending: '等待回答',
@@ -140,7 +142,7 @@ function Composer({ id }) {
 function Card({ data, resizing: nodeResizing }) {
   const ui = useContext(UI),
     n: Turn = data.turn
-  const overview = useStore((s) => s.transform[2] < 0.6)
+  const interaction = useContext(Interaction)
   const active = n.id === ui.active
   const customSize = ui.prefs.dimensions[n.id]
   const text = ui.study.answers.get(n.id) || ''
@@ -156,7 +158,7 @@ function Card({ data, resizing: nodeResizing }) {
   const body = useRef(null),
     [long, setLong] = useState(false)
   useLayoutEffect(() => {
-    if (overview || !card.current) return
+    if (!card.current) return
     const observer = new ResizeObserver(([entry]) => {
       const size = entry.borderBoxSize?.[0]
       ui.measure(n.id, {
@@ -166,25 +168,22 @@ function Card({ data, resizing: nodeResizing }) {
     })
     observer.observe(card.current)
     return () => observer.disconnect()
-  }, [n.id, overview, ui.measure])
+  }, [n.id, ui.measure])
   useLayoutEffect(() => {
     if (body.current) setLong(excerpt !== text || body.current.scrollHeight > 118)
-  }, [text, excerpt, overview, expanded])
+  }, [text, excerpt, expanded])
   return (
     <article
       ref={card}
-      className={'st-card ' + (active ? 'active ' : '') + (customSize || nodeResizing ? 'sized ' : '') + (overview ? 'overview ' : '') + (ui.pathIds.has(n.id) ? 'onpath' : '')}
+      className={'st-card ' + (active ? 'active ' : '') + (customSize || nodeResizing ? 'sized ' : '') + (ui.pathIds.has(n.id) ? 'onpath' : '')}
       onClick={() => ui.pick(n)}
     >
       <NodeResizer
-        isVisible={active && !overview}
+        isVisible={active}
         minWidth={420}
         minHeight={380}
-        onResizeStart={() => { ui.resizing.current = true }}
-        onResizeEnd={(_, size) => {
-          ui.resizing.current = false
-          ui.resize(n.id, size)
-        }}
+        onResizeStart={() => interaction.begin(n.id, 'resize')}
+        onResizeEnd={(_, size) => interaction.finish(n.id, size)}
       />
       <Handle type="target" position={Position.Top} />
       <header className="st-grip">
@@ -198,8 +197,7 @@ function Card({ data, resizing: nodeResizing }) {
         <span className="st-role"><MessageSquare size={13} />我的问题</span>
         <h3>{n.question}</h3>
       </div>
-      {!overview && (
-        <>
+      <>
           <div className="st-answer-region">
           <div className="st-answer-heading">
             <span className="st-role"><Sparkles size={13} />DSH 回答</span>
@@ -247,8 +245,7 @@ function Card({ data, resizing: nodeResizing }) {
           {n.error && text && <small>{n.error}</small>}
           </div>
           {active && <Composer key={n.id} id={n.id} />}
-        </>
-      )}
+      </>
       <Handle type="source" position={Position.Bottom} />
     </article>
   )
@@ -342,7 +339,8 @@ function CanvasTools({ focusCurrent, edgeStyle, onEdgeStyle, onArrange }) {
 function Canvas({
   nodes,
   edges,
-  onDropNode,
+  onCommit,
+  interacting,
   onInit,
   view,
   onView,
@@ -352,22 +350,10 @@ function Canvas({
   onEdgeStyle,
   onArrange,
 }) {
-  const [display, setDisplay, onNodesChange] = useNodesState(nodes)
-  useEffect(() => {
-    setDisplay((current) => {
-      const previous = new Map(current.map((node) => [node.id, node]))
-      // Retain measured dimensions and active dragging across external data/layout updates.
-      return nodes.map((node) => {
-        const retained = previous.get(node.id)
-        return {
-          ...retained,
-          ...node,
-          position: retained?.dragging ? retained.position : node.position,
-        }
-      })
-    })
-  }, [nodes, setDisplay])
+  const { display, onNodesChange, begin, finish } = useAdaptiveNodes(nodes, onCommit, interacting)
+  const interaction = React.useMemo(() => ({ begin, finish }), [begin, finish])
   return (
+    <Interaction.Provider value={interaction}>
     <ReactFlow
       proOptions={{ hideAttribution: true }}
       nodes={display}
@@ -378,7 +364,8 @@ function Canvas({
       onMoveEnd={(_, v) => onView(v)}
       onPaneClick={onBlank}
       onNodesChange={onNodesChange}
-      onNodeDragStop={(_, node) => onDropNode(node)}
+      onNodeDragStart={(_, node) => begin(node.id, 'drag')}
+      onNodeDragStop={(_, node) => finish(node.id)}
       nodesConnectable={false}
       minZoom={0.28}
       maxZoom={1.65}
@@ -392,6 +379,7 @@ function Canvas({
         onArrange={onArrange}
       />
     </ReactFlow>
+    </Interaction.Provider>
   )
 }
 
@@ -431,7 +419,6 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     setPrefs((p) => ({ ...p, tree: n.treeId, selected: { ...p.selected, [n.treeId]: n.id } }))
   }
   const pick = (n) => {
-    if (flow.current?.getZoom() < 0.6) focus(n)
     if (n.id !== active) {
       select(n)
       setSelection(null)
@@ -469,20 +456,24 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     }
   }, [study])
   const sizes = useRef<Sizes>({})
-  const resizing = useRef(false)
+  const interacting = useRef(false)
   for (const [id, size] of Object.entries(prefs.dimensions)) sizes.current[id] = size
   const layoutInput = useRef({ treeId, turns })
   layoutInput.current = { treeId, turns }
   const measure = React.useCallback((id, size) => {
     const previous = sizeOf(id, sizes.current)
     sizes.current[id] = size
-    if (resizing.current || (size.height <= previous.height + 1 && size.width <= previous.width + 1)) return
+    if (interacting.current || (Math.abs(size.height - previous.height) < 1 && Math.abs(size.width - previous.width) < 1)) return
     setPrefs((current) => {
       const { treeId, turns } = layoutInput.current
       const stored = current.positions[treeId]
       if (!stored || current.layoutVersions[treeId] !== LAYOUT_VERSION) return current
-      const positions = makeRoom(turns, stored, sizes.current, id)
-      return positions === stored
+      const base: Rects = Object.fromEntries(turns.filter(n => stored[n.id]).map(n => [n.id, {
+        ...stored[n.id], ...(n.id === id ? previous : sizeOf(n.id, sizes.current)),
+      }]))
+      if (!base[id]) return current
+      const positions = adaptLayout(base, id, { ...stored[id], ...size })
+      return Object.keys(positions).every(id => positions[id].x === stored[id].x && positions[id].y === stored[id].y)
         ? current
         : {
             ...current,
@@ -490,15 +481,6 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
           }
     })
   }, [])
-  function resize(id, size) {
-    const dimensions = { width: Math.round(size.width), height: Math.round(size.height) }
-    sizes.current[id] = dimensions
-    setPrefs(current => ({
-      ...current,
-      dimensions: { ...current.dimensions, [id]: dimensions },
-      positions: { ...current.positions, [treeId]: makeRoom(turns, { ...positions, [id]: { x: size.x, y: size.y } }, sizes.current, id) },
-    }))
-  }
   const positions = React.useMemo(
     () =>
       prefs.layoutVersions[treeId] === LAYOUT_VERSION
@@ -761,8 +743,6 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
         pathIds,
         busy,
         measure,
-        resizing,
-        resize,
         resetSize: (id) => setPrefs(current => {
           const dimensions = { ...current.dimensions }
           delete dimensions[id]
@@ -915,6 +895,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
               edges={edges}
               onInit={(i) => {
                 flow.current = i
+                requestFocus()
               }}
               view={initialView}
               onView={(v) => field('views', treeId, v)}
@@ -925,7 +906,12 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
                 const n = byId.get(active)
                 if (n) focus(n)
               }}
-              onDropNode={(n) => field('positions', treeId, { ...positions, [n.id]: n.position })}
+              interacting={interacting}
+              onCommit={(positions, resized) => setPrefs(current => ({
+                ...current,
+                positions: { ...current.positions, [treeId]: positions },
+                dimensions: resized ? { ...current.dimensions, [resized.id]: { width: resized.width, height: resized.height } } : current.dimensions,
+              }))}
               onBlank={() => {
                 setSelection(null)
                 const menu = root.current?.querySelector('.st-actions')

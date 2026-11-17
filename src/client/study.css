@@ -208,7 +208,6 @@
   max-height: 440px;
 }
 .st-card.sized .st-body { flex: 1; max-height: none; }
-.st-card.overview .st-question { border-radius: 0 0 16px 16px; }
 .st .react-flow__resize-control.handle { width: 8px; height: 8px; border-radius: 3px; border-color: var(--st-bg); background: var(--st-path); }
 .st .react-flow__resize-control.line { border-color: transparent; }
 .st .react-flow__resize-control.line:hover { border-color: var(--st-path); }
