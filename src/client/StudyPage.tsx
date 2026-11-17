@@ -16,7 +16,6 @@ import {
   Plus,
   Ellipsis,
   GripHorizontal,
-  Minimize2,
   X,
 } from 'lucide-react'
 import {
@@ -123,7 +122,6 @@ function Card({ data, resizing: nodeResizing }) {
         </span>
         <h3 className="st-question nodrag nopan nowheel" title={n.question}>{n.question}</h3>
         {n.status === 'sending' || n.status === 'preparing' ? <span className="st-generating">生成中</span> : null}
-        {customSize && <button className="st-card-reset nodrag" title="恢复默认尺寸" aria-label="恢复默认尺寸" onClick={() => ui.resetSize(n.id)}><Minimize2 size={13} /></button>}
         <GripHorizontal className="st-drag-hint" size={14} aria-hidden />
         </div>
           {n.anchor && (
@@ -626,11 +624,6 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
         pathIds,
         busy,
         measure,
-        resetSize: (id) => setPrefs(current => {
-          const dimensions = { ...current.dimensions }
-          delete dimensions[id]
-          return { ...current, dimensions }
-        }),
         submit,
         pick,
         focus,

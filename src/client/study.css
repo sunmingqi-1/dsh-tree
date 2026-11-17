@@ -915,7 +915,7 @@
   overflow: hidden;
   border: 1px solid var(--st-line);
   border-radius: 12px;
-  background: var(--st-bg);
+  background: var(--st-soft);
   box-shadow: var(--dsw-elevation-soft);
 }
 .st-card-head .st-grip { padding: 7px 9px; min-height: 36px; border: 0; gap: 9px; }
@@ -935,7 +935,6 @@
 }
 .st-drag-hint { flex: none; color: var(--st-muted); opacity: 0.45; }
 .st-generating { flex: none; font-size: 11px; color: var(--st-muted); }
-.st .st-card-reset { display: grid; place-items: center; padding: 4px; color: var(--st-muted); flex: none; }
 .st-card-head .st-quote {
   display: block;
   width: 100%;
