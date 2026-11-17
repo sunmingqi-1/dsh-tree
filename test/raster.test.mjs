@@ -54,3 +54,17 @@ test('缩放后继续平移不会每帧释放图层，下一次缩放结束仍�
   policy.start({ type: 'wheel' }); policy.end({ zoom: 1.6 })
   assert.equal(layer.style.willChange, 'auto')
 })
+
+test('标题层只在缩放结束时按最终比例排版，平移和中间帧不触发布局', () => {
+  const layer = { style: { willChange: 'auto' } }, refreshed = []
+  const policy = rasterPolicy(() => layer, 0.5, zoom => refreshed.push(zoom))
+  policy.start({ type: 'wheel' })
+  for (let i = 1; i <= 100; i++) policy.change({ zoom: 0.5 + i / 100 })
+  assert.deepEqual(refreshed, [])
+  policy.end({ zoom: 1.5 })
+  assert.deepEqual(refreshed, [1.5])
+  policy.start({ type: 'mousedown' }); policy.change({ zoom: 1.5 }); policy.end({ zoom: 1.5 })
+  assert.deepEqual(refreshed, [1.5])
+  policy.start(null); policy.change({ zoom: 1.2 }); policy.end({ zoom: 1.2 })
+  assert.deepEqual(refreshed, [1.5, 1.2])
+})

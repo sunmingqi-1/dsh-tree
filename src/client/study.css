@@ -909,9 +909,13 @@
 .st-card-head {
   position: absolute;
   z-index: 3;
-  top: 10px;
-  left: 12px;
-  right: 12px;
+  /* CSS zoom changes glyph layout; the inverse transform preserves card size. */
+  zoom: var(--st-header-scale, 1);
+  transform: scale(calc(1 / var(--st-header-scale, 1)));
+  transform-origin: top left;
+  top: calc(10px / var(--st-header-scale, 1));
+  left: calc(12px / var(--st-header-scale, 1));
+  width: calc(100% * var(--st-header-scale, 1) - 24px);
   overflow: hidden;
   border: 1px solid var(--st-line);
   border-radius: 12px;
@@ -928,6 +932,7 @@
   background: transparent;
   font-size: 15px;
   font-weight: 600;
+  color: var(--st-ink);
   line-height: 22px;
   max-height: 44px;
   overflow: auto;

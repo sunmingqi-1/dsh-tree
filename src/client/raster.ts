@@ -1,6 +1,6 @@
 // Reuse the layer throughout a camera gesture. Re-raster once at the final
 // scale instead of repainting all Markdown on every intermediate zoom frame.
-export function rasterPolicy(layer: () => HTMLElement | null, initialZoom: number) {
+export function rasterPolicy(layer: () => HTMLElement | null, initialZoom: number, settled: (zoom: number) => void = () => {}) {
   let zoom = initialZoom, scaling = false
   const hint = (value: string) => {
     const element = layer()
@@ -21,7 +21,19 @@ export function rasterPolicy(layer: () => HTMLElement | null, initialZoom: numbe
     change,
     end(view: { zoom: number }) {
       change(view)
-      if (scaling) hint('auto')
+      if (scaling) {
+        hint('auto')
+        settled(zoom)
+      }
     },
   }
+}
+
+// Lay out small floating headers at their displayed pixel size, then cancel
+// the viewport's transform scale locally. Keep this out of intermediate frames.
+export function headerRasterScale(element: HTMLElement | null, zoom: number) {
+  if (!element || !Number.isFinite(zoom) || zoom <= 0) return
+  const value = String(zoom)
+  if (element.style.getPropertyValue('--st-header-scale') !== value)
+    element.style.setProperty('--st-header-scale', value)
 }

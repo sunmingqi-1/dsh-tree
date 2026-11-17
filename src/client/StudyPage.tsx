@@ -23,6 +23,7 @@ import {
   Handle,
   Position,
   NodeResizer,
+  useStoreApi,
 } from '@xyflow/react'
 import Markdown from 'react-markdown'
 import gfm from 'remark-gfm'
@@ -37,7 +38,7 @@ import { adaptLayout, type Rects } from './adaptive'
 import { useAdaptiveNodes } from './useAdaptiveNodes'
 import { NativeComposerSeat } from './NativeComposer'
 import { CanvasTools } from './CanvasTools'
-import { rasterPolicy } from './raster'
+import { rasterPolicy, headerRasterScale } from './raster'
 
 const UI = createContext<any>(null)
 const Interaction = createContext<any>(null)
@@ -82,6 +83,7 @@ function Card({ data, resizing: nodeResizing }) {
   const text = ui.study.answers.get(n.id) || ''
   const card = useRef<HTMLElement>(null)
   const header = useRef<HTMLElement>(null)
+  const flowStore = useStoreApi()
   useLayoutEffect(() => {
     if (!card.current) return
     const observer = new ResizeObserver(([entry]) => {
@@ -96,10 +98,11 @@ function Card({ data, resizing: nodeResizing }) {
   }, [n.id, ui.measure])
   useLayoutEffect(() => {
     if (!header.current || !card.current) return
+    headerRasterScale(header.current, flowStore.getState().transform[2])
     const observer = new ResizeObserver(() => card.current?.style.setProperty('--st-head-space', header.current.offsetHeight + 24 + 'px'))
     observer.observe(header.current)
     return () => observer.disconnect()
-  }, [])
+  }, [flowStore])
   return (
     <article
       ref={card}
@@ -229,7 +232,10 @@ function Canvas({
   if (!raster.current) raster.current = rasterPolicy(() => {
     if (!layer.current?.isConnected) layer.current = canvas.current?.querySelector('.react-flow__viewport') || null
     return layer.current
-  }, view.zoom)
+  }, view.zoom, zoom => {
+    for (const header of layer.current?.querySelectorAll<HTMLElement>('.st-card-head') || [])
+      headerRasterScale(header, zoom)
+  })
   return (
     <Interaction.Provider value={interaction}>
     <ReactFlow
