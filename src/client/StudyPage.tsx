@@ -38,6 +38,7 @@ import { adaptLayout, type Rects } from './adaptive'
 import { useAdaptiveNodes } from './useAdaptiveNodes'
 import { NativeComposerSeat } from './NativeComposer'
 import { CanvasTools } from './CanvasTools'
+import { CanvasMiniMap } from './CanvasMiniMap'
 import { rasterPolicy, headerRasterScale } from './raster'
 
 const UI = createContext<any>(null)
@@ -259,6 +260,7 @@ function Canvas({
       deleteKeyCode={null}
     >
       <CanvasBackground />
+      <CanvasMiniMap />
       <CanvasTools
         focusCurrent={focusCurrent}
         edgeStyle={edgeStyle}
@@ -584,7 +586,12 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
           target: n.id,
           type: prefs.edgeStyle === 'rounded-step' ? 'smoothstep' : 'default',
           pathOptions: { borderRadius: 12, offset: 24 },
-          style: { stroke: pathIds.has(n.id) ? 'var(--st-path)' : 'var(--st-line)' },
+          style: {
+            stroke: pathIds.has(n.id) ? 'var(--st-edge-active)' : 'var(--st-edge)',
+            strokeWidth: pathIds.has(n.id) ? 2.5 : 2,
+            vectorEffect: 'non-scaling-stroke',
+            strokeLinecap: 'round',
+          },
         })),
     [turns, pathIds, prefs.edgeStyle],
   )

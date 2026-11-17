@@ -30,6 +30,8 @@
   --st-muted: var(--dsw-alias-label-secondary);
   --st-line: var(--dsw-alias-border-l2);
   --st-path: var(--dsw-alias-state-business-primary);
+  --st-edge: color-mix(in srgb, var(--st-muted) 65%, var(--st-line));
+  --st-edge-active: color-mix(in srgb, var(--st-path) 85%, var(--st-ink));
 }
 .st button:where(:not(.st-native-reader *, .st-native-controls *, .st-native-composer *)),
 .st textarea,
@@ -1047,6 +1049,23 @@
 .st-edge-popup button i { width: 14px; }
 .st-edge-popup button:hover, .st-edge-popup button:focus-visible { outline: 0; background: var(--dsw-alias-interactive-bg-hover); }
 .st-edge-popup button[aria-checked='true'] { color: var(--dsw-alias-state-business-primary); }
+.st .st-minimap {
+  right: 16px;
+  bottom: 16px;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--st-line);
+  border-radius: 14px;
+  box-shadow: var(--dsw-elevation-soft);
+  cursor: grab;
+}
+.st .st-minimap:active { cursor: grabbing; }
+@container (max-width: 900px) {
+  .st .st-minimap { bottom: 80px; }
+}
+@container (max-width: 380px) {
+  .st .st-minimap { right: 12px; bottom: 116px; }
+}
 @container (max-width: 520px) {
   .st-canvas-tools .st-layout-action span { display: none; }
   .st .st-canvas-tools { gap: 2px; }

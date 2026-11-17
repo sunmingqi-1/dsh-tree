@@ -14,8 +14,10 @@ export function rasterPolicy(layer: () => HTMLElement | null, initialZoom: numbe
     zoom = view.zoom
   }
   return {
-    start(event: { type: string } | null) {
-      scaling = !event || !['mousedown', 'pointerdown', 'touchstart'].includes(event.type)
+    start(_event: { type: string } | null) {
+      // Programmatic camera moves also come from minimap panning. Only actual
+      // scale changes need a final text refresh, regardless of event source.
+      scaling = false
       hint('transform')
     },
     change,

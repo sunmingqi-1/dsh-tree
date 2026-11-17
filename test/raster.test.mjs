@@ -68,3 +68,13 @@ test('标题层只在缩放结束时按最终比例排版，平移和中间帧�
   policy.start(null); policy.change({ zoom: 1.2 }); policy.end({ zoom: 1.2 })
   assert.deepEqual(refreshed, [1.5, 1.2])
 })
+
+test('小地图程序平移不改变缩放时，保留缓存且不重排标题', () => {
+  const layer = { style: { willChange: 'auto' } }, refreshed = []
+  const policy = rasterPolicy(() => layer, 1, zoom => refreshed.push(zoom))
+  for (let i = 0; i < 100; i++) {
+    policy.start(null); policy.change({ zoom: 1 }); policy.end({ zoom: 1 })
+  }
+  assert.equal(layer.style.willChange, 'transform')
+  assert.deepEqual(refreshed, [])
+})
