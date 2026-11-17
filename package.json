@@ -61,5 +61,21 @@
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
     "zod": "^4.6.7"
-  }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sunmingqi-1/dsh-study-tree.git"
+  },
+  "homepage": "https://github.com/sunmingqi-1/dsh-study-tree#readme",
+  "bugs": {
+    "url": "https://github.com/sunmingqi-1/dsh-study-tree/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "learning",
+    "infinite-canvas",
+    "conversation-tree"
+  ]
 }
