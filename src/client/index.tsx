@@ -1,4 +1,5 @@
 import React from 'react'
+import { GitBranch } from 'lucide-react'
 import { Study } from './study'
 import { WorkspaceTree, NewStudyButton, useStudy } from './WorkspaceTree'
 import { NativeFrame } from './NativeFrame'
@@ -110,12 +111,16 @@ export function apply(ctx) {
         return (
           <button
             className="st-native-start"
+            type="button"
+            aria-label="以学习画布开始"
+            title="以学习画布开始"
             onClick={() => {
               if (sessionId) study.armRoot(sessionId)
               else study.startNew()
             }}
           >
-            以学习画布开始
+            <GitBranch size={16} aria-hidden="true" />
+            <span>学习画布</span>
           </button>
         )
       },
