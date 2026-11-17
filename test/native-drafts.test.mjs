@@ -19,7 +19,7 @@ function fixture() {
     const state = { phase: 'plain', draft: '', attachmentIds: [] }
     const input = {
       state: { getSnapshot: () => state, subscribe: fn => { inputListeners.add(fn); return () => inputListeners.delete(fn) } },
-      insertQuote: text => { state.draft = quoteText(text) + ' ' },
+      insertQuote: text => { state.draft += quoteText(text) + ' '; return true },
       setDraft: text => { state.draft = typeof text === 'string' ? text : text.text },
       get draftSnapshot() { return { text: state.draft, references: [] } },
       addAttachments: ids => { state.attachmentIds = [...state.attachmentIds, ...ids] },
@@ -71,6 +71,23 @@ test('卡片和划词编辑器使用不同会话，不共享 Lexical root 或草
   assert.equal(card.binding().input.state.getSnapshot().draft, '卡片草稿')
   assert.match(quote.binding().input.state.getSnapshot().draft, /> 工具/)
   card.stop(); quote.stop(); assert.equal(f.held(), 0)
+})
+
+test('添加到对话复用卡片输入，保留草稿和附件，未发送时不创建节点', async () => {
+  const f = fixture(), card = f.mount(); await tick()
+  card.binding().input.setDraft('已有问题 ')
+  card.binding().input.addAttachments(['file-a'])
+  const anchor = { text: '工具调用', start: 4, prefix: '', suffix: '' }
+  await f.drafts.addToCard(f.parent, anchor)
+  assert.equal(f.forks.length, 1)
+  assert.equal(card.binding().input.state.getSnapshot().draft, '已有问题 > 工具调用 ')
+  assert.deepEqual(card.binding().input.state.getSnapshot().attachmentIds, ['file-a'])
+  assert.equal(f.study.nodes.length, 0)
+  card.binding().add({ type: 'user/message', seq: 4, data: { source: { rpcId: 'quoted-card' }, content: [{ type: 'text', text: '> 工具调用\n\n原有问题' }] } })
+  await tick()
+  assert.deepEqual(f.study.nodes[0].anchor, anchor)
+  assert.equal(f.study.nodes[0].question, '原有问题')
+  card.stop(); assert.equal(f.held(), 0)
 })
 
 test('预备划词输入后，反复更换选区不再创建或释放会话，也不刷新全局目录', async () => {

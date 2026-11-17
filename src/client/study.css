@@ -712,9 +712,6 @@
 }
 
 /* Learning branches live in the native Workspace Session rows. */
-[data-row-key^='session:']:has(.st-tree-member) {
-  display: none !important;
-}
 [data-row-key^='session:']:has(.st-native-tree) {
   display: block !important;
   height: auto !important;
@@ -1052,6 +1049,32 @@ div:has(> div > [data-slot='conversation.hero.options'] > .st-native-start) {
   color: var(--st-ink);
   font: 14px/1.5 var(--dsw-font-family, system-ui);
 }
+.st-selection-actions {
+  position: absolute;
+  z-index: 13;
+  display: inline-flex;
+  max-width: calc(100% - 16px);
+  overflow: hidden;
+  border: 1px solid var(--st-line);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-l3, var(--st-pane));
+  box-shadow: var(--dsw-elevation-panel);
+  color: var(--st-ink);
+  font: 500 13px/1.5 var(--dsw-font-family, system-ui);
+}
+.st-selection-actions button {
+  border: 0;
+  background: transparent;
+  padding: 8px 12px;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.st-selection-actions button + button { border-left: 1px solid var(--st-line); }
+.st-selection-actions button:hover, .st-selection-actions button:focus-visible { background: var(--st-soft); }
+.st-selection-actions button:focus-visible { outline: 2px solid var(--st-accent); outline-offset: -3px; }
+.st-selection-actions button:disabled { opacity: 0.55; cursor: wait; }
 .st-quote-caption { display: flex; align-items: center; justify-content: space-between; padding: 4px 5px 5px; color: var(--st-muted); font-size: 11px; }
 .st-quote-caption button { display: grid; place-items: center; cursor: pointer; border: 0; border-radius: 6px; padding: 4px; background: transparent; color: inherit; }
 .st-quote-caption button:hover { background: var(--st-soft); }

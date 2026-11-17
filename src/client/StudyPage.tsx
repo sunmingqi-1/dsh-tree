@@ -137,7 +137,10 @@ function Card({ data, resizing: nodeResizing }) {
     <article
       ref={card}
       className={'st-card ' + (active ? 'active ' : '') + (customSize || nodeResizing ? 'sized ' : '') + (ui.pathIds.has(n.id) ? 'onpath' : '')}
-      onClick={() => ui.pick(n)}
+      onClick={(event) => {
+        if (event.target.closest('[data-answer]') && !window.getSelection()?.isCollapsed) return
+        ui.pick(n)
+      }}
     >
       <NodeResizer
         isVisible={active}
@@ -552,7 +555,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     }
   }
   function capture(e, context) {
-    if (e.target.closest('.st-native-composer, .st-quote-popover')) return
+    if (e.target.closest('.st-native-composer, .st-quote-popover, .st-selection-actions')) return
     const s = window.getSelection()
     if (!s?.rangeCount || s.isCollapsed) {
       if (!e.target.closest('.st-quote-popover')) setSelection(null)
@@ -571,9 +574,11 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
       id: body.dataset.answer,
       anchor,
       range: range.cloneRange(),
+      mode: 'actions',
       focus: context,
       x: Math.max(8, Math.min(rect.left - bounds.left, bounds.width - 420)),
-      y: Math.max(8, Math.min(rect.bottom - bounds.top + 8, bounds.height - 220)),
+      y: Math.max(8, Math.min(rect.top - bounds.top - 44, bounds.height - 44)),
+      branchY: Math.max(8, Math.min(rect.bottom - bounds.top + 8, bounds.height - 220)),
     })
   }
   useLayoutEffect(() => {
@@ -585,6 +590,33 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     if (selection?.range) registry.set('study-tree-quote', new Highlight(selection.range))
     return () => registry.delete('study-tree-quote')
   }, [selection])
+  useEffect(() => {
+    if (selection?.mode !== 'added') return
+    const focus = () => {
+      const input = nativeFrame.querySelector(`.react-flow__node[data-id="${CSS.escape(selection.id)}"] [data-study-composer="card"] [data-composer-input]`)
+      if (!input) return false
+      input.focus({ preventScroll: true })
+      return true
+    }
+    if (focus()) return
+    const observer = new MutationObserver(() => { if (focus()) observer.disconnect() })
+    observer.observe(nativeFrame, { childList: true, subtree: true })
+    const timer = setTimeout(() => observer.disconnect(), 5000)
+    return () => { clearTimeout(timer); observer.disconnect() }
+  }, [selection?.mode, selection?.id, nativeFrame])
+  async function addSelection() {
+    const current = selection, node = byId.get(current.id)
+    if (!node) return
+    setSelection({ ...current, mode: 'adding' })
+    select(node)
+    try {
+      await study.composers.addToCard(node, current.anchor)
+      setSelection(value => value?.range === current.range ? { ...value, mode: 'added' } : value)
+    } catch (error) {
+      setError(error.message)
+      setSelection(value => value?.range === current.range ? { ...value, mode: 'actions' } : value)
+    }
+  }
   const nodes = React.useMemo(
     () =>
       turns.map((n) => ({
@@ -672,7 +704,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
         className="st"
         ref={root}
         onMouseUp={(e) => {
-          if (!e.target.closest('.st-quote-popover, .st-native-composer')) capture(e, false)
+          if (!e.target.closest('.st-quote-popover, .st-native-composer, .st-selection-actions')) capture(e, false)
         }}
         onContextMenuCapture={(e) => {
           if (e.target.closest('[data-answer]')) {
@@ -886,9 +918,19 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
           onQuote={(event) => capture(event, true)}
           inputReady={!!activePending || (byId.get(active)?.endSeq != null && study.readerTarget?.parentId === active && study.readerTarget?.sessionId === nativeSessionKey)}
         />
-        {selection &&
+        {selection && selection.mode !== 'added' &&
           createPortal(
-            <div
+            selection.mode !== 'branch' ? <div
+              className="st-selection-actions nodrag nopan nowheel"
+              role="toolbar"
+              aria-label="选中文字操作"
+              style={{ left: selection.x, top: selection.y }}
+              onMouseDown={event => event.preventDefault()}
+              onClick={event => event.stopPropagation()}
+            >
+              <button type="button" disabled={selection.mode === 'adding'} onClick={addSelection}>添加到对话</button>
+              <button type="button" disabled={selection.mode === 'adding'} onClick={() => setSelection(value => ({ ...value, mode: 'branch', y: value.branchY, focus: true }))}>在分支中提问</button>
+            </div> : <div
               className="st-quote-popover"
               role="dialog"
               aria-label="引用追问"

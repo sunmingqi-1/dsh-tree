@@ -7,11 +7,11 @@ export const controlSeat = (name: string) => 'studyTree.card.' + name
 // registrations into plugin-owned seats, retaining their components, injection,
 // locale and stores. Every editor gets a distinct prepared Session binding.
 // This adapter is pinned to the DSH version declared in package.json.
-export function mirrorNativeControl(ctx, source: string, exclude?: (entry: any) => boolean) {
-  return ctx.slots.inject(controlSeat(source), () => mirrorActiveControl(ctx, source, exclude))
+export function mirrorNativeControl(ctx, source: string, exclude?: (entry: any) => boolean, transform?: (component: any) => any) {
+  return ctx.slots.inject(controlSeat(source), () => mirrorActiveControl(ctx, source, exclude, transform))
 }
 
-function mirrorActiveControl(ctx, source: string, exclude?: (entry: any) => boolean) {
+function mirrorActiveControl(ctx, source: string, exclude?: (entry: any) => boolean, transform?: (component: any) => any) {
   let disposed = false
   const registrations = new Map<any, () => void>()
   let previous = null
@@ -36,7 +36,7 @@ function mirrorActiveControl(ctx, source: string, exclude?: (entry: any) => bool
       const children = Object.fromEntries(
         Object.entries(entry.children || {}).map(([name, spec]) => [controlSeat(name), spec]),
       )
-      const Component = entry.component
+      const Component = transform ? transform(entry.component) : entry.component
       const render = (props) => (
         <Component
           {...props}

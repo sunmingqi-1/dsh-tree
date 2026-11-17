@@ -62,7 +62,7 @@ const { chromium } = require('playwright-core')
     const source = page
       .locator('.st-card.active .st-turn-flow')
       .getByText('第三段是最终结果。本轮结束后才显示继续提问输入框。', { exact: true })
-    const select = async (index) => {
+    const select = async (index, branch = true) => {
       await source.evaluate((element, offset) => {
         const node = document.createTreeWalker(element, NodeFilter.SHOW_TEXT).nextNode()
         const range = new Range()
@@ -75,6 +75,10 @@ const { chromium } = require('playwright-core')
           new MouseEvent('mouseup', { bubbles: true, clientX: 600, clientY: 600 }),
         )
       }, index)
+      await page.getByRole('toolbar', { name: '选中文字操作' }).waitFor()
+      assert.equal(await page.locator('.st-quote-popover').count(), 0)
+      if (!branch) return
+      await page.getByRole('button', { name: '在分支中提问', exact: true }).click()
       await page.locator('.st-quote-popover [data-composer-input][contenteditable=true]').waitFor()
       assert.ok(await page.evaluate(() => CSS.highlights.has('study-tree-quote')))
     }
@@ -94,6 +98,20 @@ const { chromium } = require('playwright-core')
     )
     await page.screenshot({ path: process.env.TEMP + '/study-selection-popup-complete.png' })
     await page.keyboard.press('Escape')
+    const cardInput = page.locator('.st-card.active [data-study-composer="card"] [data-composer-input]')
+    await cardInput.fill('卡片原有草稿')
+    await cardInput.press('End')
+    const cards = await page.locator('.st-card').count()
+    await select(2, false)
+    await page.locator('.st-card.active').screenshot({ path: process.env.TEMP + '/study-selection-actions.png' })
+    await page.getByRole('button', { name: '添加到对话', exact: true }).click()
+    await page.waitForFunction(() => document.querySelector('.st-card.active [data-study-composer="card"] [data-composer-input]')?.textContent.includes('段是最终'))
+    assert.ok((await cardInput.innerText()).includes('卡片原有草稿'))
+    assert.equal(await page.locator('.st-card').count(), cards, 'adding a quote must not submit or branch')
+    assert.equal(await page.locator('.st-quote-popover').count(), 0)
+    assert.ok(await cardInput.evaluate(element => element === document.activeElement))
+    assert.ok(await page.evaluate(() => CSS.highlights.has('study-tree-quote')))
+    await page.locator('.st-card.active').screenshot({ path: process.env.TEMP + '/study-selection-added.png' })
     const after = await page.evaluate(() => {
       selectionProbe.run = false
       selectionProbe.observer.disconnect()
@@ -114,7 +132,7 @@ const { chromium } = require('playwright-core')
     assert.equal(after.incomplete, 0, 'popup first appears with its complete native editor')
     assert.deepEqual(errors, [])
     console.log(
-      'repeated selection: zero sidebar mutations/new sessions, complete popup, isolated drafts/highlight; PASS',
+      'two selection actions; add-to-card preserves draft/focus/highlight without sending; branch popup complete; zero sidebar mutations/new sessions; PASS',
     )
   } finally {
     await browser.close()

@@ -25,6 +25,20 @@ export class NativeDrafts {
     try { return JSON.parse(localStorage.getItem('dsh-study-tree:composer-drafts') || '{}') } catch { return {} }
   })()
   private pending = new Map<string, Promise<string>>()
+  private cardQuotes: Record<string, Anchor> = (() => {
+    try { return JSON.parse(localStorage.getItem('dsh-study-tree:card-quotes') || '{}') } catch { return {} }
+  })()
+  async addToCard(parent: Turn, anchor: Anchor) {
+    const sessionId = await this.session(parent, 'card', null)
+    await this.study.ctx.sessions.using(sessionId, { source: 'studyTree' }, async reference => {
+      const binding = await reference.ready
+      const input = this.study.ctx.conversation.input.for(binding.ctx)
+      if (input.state.getSnapshot().phase !== 'plain') throw new Error('请等待当前提问发送完成后再添加引用')
+      if (input.insertQuote(anchor.text) === false) throw new Error('引用未能加入输入框，请重试')
+      this.cardQuotes[sessionId] = anchor
+      try { localStorage.setItem('dsh-study-tree:card-quotes', JSON.stringify(this.cardQuotes)) } catch {}
+    })
+  }
   private stops = new Set<() => void>()
   private accepting = new Set<string>()
   private migrated = (() => {
@@ -194,7 +208,7 @@ export class NativeDrafts {
         const text = message.data.content.filter(part => part.type === 'text').map(part => part.text).join('\n')
         const node: Turn = {
           id: crypto.randomUUID(), treeId: parent.treeId, parentId: parent.id,
-          ...nativeQuestion(text, anchor), created: Date.now(), sessionId,
+          ...nativeQuestion(text, kind === 'card' ? this.cardQuotes[sessionId] || null : anchor), created: Date.now(), sessionId,
           requestId: message.data.source.rpcId, endSeq: null, status: 'sending', error: null, revision: 0,
         }
         this.submissions[node.id] = node

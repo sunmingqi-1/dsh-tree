@@ -7,6 +7,7 @@ import { NativeComposerBridge } from './NativeComposer'
 import { controlSeat, mirrorNativeControl } from './nativeControls'
 import { NativeTurnBridge, installNativeTurns, nativeTurnSpec, turnSeat } from './NativeTurn'
 import { installNativeInteractions } from './NativeInteraction'
+import { installNativeWorkspace } from './NativeWorkspace'
 import '@xyflow/react/dist/style.css'
 import './study.css'
 
@@ -25,7 +26,6 @@ export const inject = [
 ]
 export function apply(ctx) {
   const study = new Study(ctx)
-  const representatives = new Map()
   ctx.effect(() => () => study.dispose())
   const refresh = () =>
     void study.refresh().catch((error) => {
@@ -50,7 +50,7 @@ export function apply(ctx) {
   ctx.slots.inject('sidebar.session.row.trailing', () =>
     ctx.slots.register(
       { name: 'sidebar.session.row.trailing', id: 'dsh-study-tree.directory' },
-      (props) => <WorkspaceTree study={study} {...props} representatives={representatives} />,
+      (props) => <WorkspaceTree study={study} {...props} />,
     ),
   )
   ctx.effect(() =>
@@ -103,7 +103,7 @@ export function apply(ctx) {
     ),
   )
   ctx.effect(() => {
-    const stops = [mirrorNativeControl(ctx, 'conversation.composer.bar'), installNativeTurns(ctx), installNativeInteractions(ctx, study)]
+    const stops = [mirrorNativeControl(ctx, 'conversation.composer.bar'), installNativeTurns(ctx), installNativeInteractions(ctx, study), installNativeWorkspace(ctx, study)]
     return () => stops.forEach(stop => stop())
   })
   ctx.slots.inject('conversation.hero.options', () =>

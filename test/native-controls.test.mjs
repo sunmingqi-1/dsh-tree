@@ -163,6 +163,21 @@ test('增量添加 source entry 不替换既存表单 adapter，删除新增项�
   assert.deepEqual(registry.slots.entries(alias), [])
 })
 
+test('仅变换被适配的原生入口，子 slot 保持原组件和依赖', () => {
+  const source = 'sidebar.workspaces', child = 'sidebar.session.row.trailing'
+  const entry = nativeEntry('browser', { children: { [child]: { kind: 'list', scope: 'root' } } })
+  const trailing = nativeEntry('directory')
+  const registry = slotRegistry({ [source]: [entry], [child]: [trailing] })
+  const stopDeclaration = registry.declare(controlSeat(source), { kind: 'single', scope: 'root' })
+  const calls = []
+  const stop = mirrorNativeControl(registry.ctx, source, undefined, component => { calls.push(component); return component })
+  assert.deepEqual(calls, [entry.component])
+  assert.ok(registry.slots.entries(controlSeat(child))[0])
+  registry.update(source, [entry]); registry.flush()
+  assert.deepEqual(calls, [entry.component])
+  stop(); stopDeclaration()
+})
+
 test('chain 镜像显式保留注册选项之外的原生 select 和依赖上下文', () => {
   const source = 'conversation.composer', alias = controlSeat(source)
   const select = owner => owner.pendingInteraction?.kind === 'question' ? owner.pendingInteraction : null
