@@ -1,7 +1,51 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const assert = require('node:assert/strict')
+const { zstdDecompressSync } = require('node:zlib')
 const { chromium } = require('playwright-core')
+
+const sessionDirectory = process.env.DSH_QA_SESSIONS
+
+function sessionLogs() {
+  return fs.readdirSync(sessionDirectory, { recursive: true })
+    .filter(name => /(?:^|[\\/])session(?:\.v\d+)?\.jsonl(?:\.zstd)?$/.test(name))
+    .sort()
+}
+
+function readQuestions(file) {
+  const bytes = fs.readFileSync(path.join(sessionDirectory, file))
+  const frames = []
+  if (file.endsWith('.zstd')) {
+    let offset = 0
+    while (offset < bytes.length) {
+      // Node decodes one frame per call. DSH appends a frame for each batch.
+      const { buffer, engine } = zstdDecompressSync(bytes.subarray(offset), { info: true })
+      assert.ok(engine.bytesWritten > 0, 'Zstandard decoder did not advance')
+      offset += engine.bytesWritten
+      frames.push(buffer)
+    }
+  } else frames.push(bytes)
+  return Buffer.concat(frames).toString('utf8').trim().split('\n')
+    .map(line => JSON.parse(line))
+    .filter(event => event.type === 'user/message' && event.data.source?.rpcId)
+    .map(event => event.data.content.filter(part => part.type === 'text').map(part => part.text).join('\n'))
+}
+
+async function waitForLog(sessionId, questions) {
+  const find = () => sessionLogs().find(file => path.basename(path.dirname(file)) === sessionId)
+  let lastError
+  for (let attempt = 0; attempt < 40; attempt++) {
+    try {
+      const file = find()
+      if (file) {
+        assert.deepEqual(readQuestions(file), questions)
+        return file
+      }
+    } catch (error) { lastError = error }
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+  throw lastError || new Error('找不到 Session 日志 ' + sessionId)
+}
 
 ;(async () => {
   const browser = await chromium.launch({ executablePath: process.env.DSH_QA_BROWSER || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe' })
@@ -30,9 +74,15 @@ const { chromium } = require('playwright-core')
     await editor(card).waitFor()
     const rootSession = await currentSession()
     assert.ok(rootSession)
+    const rootLog = sessionDirectory ? await waitForLog(rootSession, messages.slice(0, 1)) : null
+    const before = rootLog ? sessionLogs() : null
     await send(editor(card), messages[1])
     await editor(card).waitFor()
     assert.equal(await currentSession(), rootSession)
+    if (rootLog) {
+      assert.equal(await waitForLog(rootSession, messages.slice(0, 2)), rootLog)
+      assert.deepEqual(sessionLogs(), before, '卡片续问时不应增加 Session 日志')
+    }
 
     await editor(card).fill(messages[2])
     await page.getByRole('button', { name: '在右侧输入', exact: true }).click()
@@ -44,6 +94,10 @@ const { chromium } = require('playwright-core')
     await editor(card).waitFor()
     assert.equal(await currentSession(), rootSession)
     assert.deepEqual(await draftForks(), [])
+    if (rootLog) {
+      assert.equal(await waitForLog(rootSession, messages.slice(0, 3)), rootLog)
+      assert.deepEqual(sessionLogs(), before, '右侧续问时不应增加 Session 日志')
+    }
 
     await page.locator('.st-tree-title').filter({ hasText: messages[0] }).click()
     await waitTitle(messages[0])
@@ -60,6 +114,13 @@ const { chromium } = require('playwright-core')
     const branchSession = await currentSession()
     assert.notEqual(branchSession, rootSession)
     assert.deepEqual(await draftForks(), [branchSession])
+    if (rootLog) {
+      const branchLog = await waitForLog(branchSession, [messages[0], messages[3]])
+      assert.deepEqual(sessionLogs().filter(file => !before.includes(file)), [branchLog])
+      assert.deepEqual(readQuestions(rootLog), messages.slice(0, 3))
+      console.log(`普通续问复用文件 ${path.join(sessionDirectory, rootLog)}，其中包含三轮问题`)
+      console.log(`从旧节点分支后新增文件 ${path.join(sessionDirectory, branchLog)}`)
+    }
     const requests = fs.readFileSync(path.join(process.env.DSH_QA_OUTPUT || path.join(process.env.TEMP, 'dsh-study-tree-qa'), 'native-requests.jsonl'), 'utf8').split('\n')
     const continuation = requests.findLast(line => line.includes(messages[2]))
     const branch = requests.findLast(line => line.includes(messages[3]))
