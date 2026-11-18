@@ -3,8 +3,11 @@ import { GitBranch } from 'lucide-react'
 import { Study } from './study'
 import { WorkspaceTree, NewStudyButton, useStudy } from './WorkspaceTree'
 import { NativeFrame } from './NativeFrame'
-import { NativeComposerBridge } from './NativeComposer'
-import { controlSeat, mirrorNativeControl } from './nativeControls'
+import { NativeComposerBridge, installSharedComposer, installBranchComposer } from './NativeComposer'
+import { controlSeat } from './nativeControls'
+import { NativeTurnBridge, installNativeTurns, nativeTurnSpec, turnSeat } from './NativeTurn'
+import { installNativeInteractions } from './NativeInteraction'
+import { installNativeWorkspace } from './NativeWorkspace'
 import '@xyflow/react/dist/style.css'
 import './study.css'
 
@@ -19,10 +22,10 @@ export const inject = [
   'uiWorkspace',
   'uiSession',
   'conversation',
+  'uiConversation',
 ]
 export function apply(ctx) {
   const study = new Study(ctx)
-  const representatives = new Map()
   ctx.effect(() => () => study.dispose())
   const refresh = () =>
     void study.refresh().catch((error) => {
@@ -30,7 +33,7 @@ export function apply(ctx) {
       study.emit()
     })
   refresh()
-  ctx.on('connection/reset', refresh)
+  ctx.on('connection/reset', () => { study.turns.reconnect++; study.turns.emit(); refresh() })
   ctx.effect(() => ctx.workspaces.list.subscribe(() => study.emit()))
   ctx.effect(() => {
     window.addEventListener('focus', refresh)
@@ -47,7 +50,7 @@ export function apply(ctx) {
   ctx.slots.inject('sidebar.session.row.trailing', () =>
     ctx.slots.register(
       { name: 'sidebar.session.row.trailing', id: 'dsh-study-tree.directory' },
-      (props) => <WorkspaceTree study={study} {...props} representatives={representatives} />,
+      (props) => <WorkspaceTree study={study} {...props} />,
     ),
   )
   ctx.effect(() =>
@@ -72,8 +75,8 @@ export function apply(ctx) {
       id: 'dsh-study-tree.session',
       target: 'session',
       order: 250,
-      resolve: ({ sessionId }) => {
-        const node = study.nodes.find((item) => item.sessionId === sessionId)
+      resolve: ({ sessionId, studyNodeId }) => {
+        const node = study.nodes.find((item) => item.sessionId === sessionId && (!studyNodeId || item.id === studyNodeId))
         return [
           {
             id: 'open-study',
@@ -94,12 +97,13 @@ export function apply(ctx) {
     ctx.slots.register(
       { name: 'conversation.session.header.actions', id: 'dsh-study-tree.new', children: {
         [controlSeat('conversation.composer.bar')]: { kind: 'single', scope: 'session' },
+        [turnSeat]: nativeTurnSpec(ctx),
       } },
-      (props) => <><NewStudyButton study={study} sessionId={props.sessionId} /><NativeComposerBridge study={study} {...props} /></>,
+      (props) => <><NewStudyButton study={study} sessionId={props.sessionId} /><NativeComposerBridge study={study} {...props} /><NativeTurnBridge study={study} {...props} /></>,
     ),
   )
   ctx.effect(() => {
-    const stops = [mirrorNativeControl(ctx, 'conversation.composer.bar')]
+    const stops = [installSharedComposer(ctx, study), installBranchComposer(ctx), installNativeTurns(ctx), installNativeInteractions(ctx, study), installNativeWorkspace(ctx, study)]
     return () => stops.forEach(stop => stop())
   })
   ctx.slots.inject('conversation.hero.options', () =>

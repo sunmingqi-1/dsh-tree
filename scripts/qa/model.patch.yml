@@ -1,0 +1,17 @@
+- id: llm-pi-ai
+  config:
+    providers:
+      study-test:
+        displayName: Study test
+        api: anthropic-messages
+        baseURL: http://127.0.0.1:54382
+        apiKeyEnv: STUDY_MOCK_API_KEY
+        models:
+          - id: mock
+            name: Study test
+            contextWindow: 200000
+            maxTokens: 4096
+- id: agent-default-model
+  config:
+    provider: study-test
+    model: mock

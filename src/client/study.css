@@ -33,27 +33,27 @@
   --st-edge: color-mix(in srgb, var(--st-muted) 65%, var(--st-line));
   --st-edge-active: color-mix(in srgb, var(--st-path) 85%, var(--st-ink));
 }
-.st button:where(:not(.st-native-reader *, .st-native-controls *, .st-native-composer *)),
+.st button:where(:not(.st-native-reader *, .st-native-controls *, .st-native-composer *, .st-native-turn *, .st-native-interaction *)),
 .st textarea,
 .st input {
   font: inherit;
   color: inherit;
 }
-.st button:where(:not(.st-native-reader *, .st-native-controls *, .st-native-composer *)) {
+.st button:where(:not(.st-native-reader *, .st-native-controls *, .st-native-composer *, .st-native-turn *, .st-native-interaction *)) {
   cursor: pointer;
   border: 0;
   background: transparent;
   border-radius: 7px;
   padding: 4px 8px;
 }
-.st button:where(:not(.st-native-reader *, .st-native-controls *, .st-native-composer *)):hover {
+.st button:where(:not(.st-native-reader *, .st-native-controls *, .st-native-composer *, .st-native-turn *, .st-native-interaction *)):hover {
   background: var(--st-soft);
 }
-.st button:where(:not(.st-native-reader *, .st-native-controls *, .st-native-composer *)):disabled {
+.st button:where(:not(.st-native-reader *, .st-native-controls *, .st-native-composer *, .st-native-turn *, .st-native-interaction *)):disabled {
   opacity: 0.48;
   cursor: default;
 }
-.st button:where(:not(.st-native-reader *, .st-native-controls *, .st-native-composer *)):focus-visible,
+.st button:where(:not(.st-native-reader *, .st-native-controls *, .st-native-composer *, .st-native-turn *, .st-native-interaction *)):focus-visible,
 .st [tabindex]:focus-visible {
   outline: 2px solid var(--st-path);
   outline-offset: 2px;
@@ -151,7 +151,7 @@
   background-size: var(--st-grid-gap) var(--st-grid-gap);
 }
 .st .react-flow__node-turn {
-  width: 560px;
+  width: 640px;
 }
 .st .react-flow__handle {
   width: 6px;
@@ -712,9 +712,6 @@
 }
 
 /* Learning branches live in the native Workspace Session rows. */
-[data-row-key^='session:']:has(.st-tree-member) {
-  display: none !important;
-}
 [data-row-key^='session:']:has(.st-native-tree) {
   display: block !important;
   height: auto !important;
@@ -1021,6 +1018,30 @@ div:has(> div > [data-slot='conversation.hero.options'] > .st-native-start) {
 .st-composer-notice { padding: 6px 10px; font-size: 12px; color: var(--st-muted); }
 .st-native-preparing { min-height: 80px; box-sizing: border-box; border-radius: var(--dsw-radius-panel, 24px); padding: 16px; background: var(--st-soft); color: var(--st-muted); font-size: 13px; }
 .st-native-preparing button { margin-left: 8px; }
+.st-history-composer { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 12px; background: var(--st-soft); }
+.st-history-composer span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--st-muted); }
+.st-history-composer button { flex-shrink: 0; }
+.st-reader-input-hint, .st-shared-input-switch { color: var(--st-muted); font-size: 12px; padding: 6px 10px; }
+.st-shared-input-switch { border: 1px solid var(--st-line); border-radius: 8px; background: var(--st-soft); cursor: pointer; }
+.st-native-turn { min-width: 0; overflow-wrap: anywhere; user-select: text; cursor: text; }
+.st-native-turn[data-native-ready='true'] > .st-md { display: none; }
+.st-native-turn:not([data-native-ready='true']) > .st-turn-flow { display: none; }
+.st-native-row { min-width: 0; }
+.st-native-row:not([hidden]) ~ .st-native-row:not([hidden]) { margin-top: 14px; }
+.st-native-row[hidden] { margin: 0; }
+.st-native-row[data-chat-flow-kind='turn-tail'] { margin-top: 16px; }
+.st-turn-unknown { font-size: 12px; color: var(--st-muted); }
+.st-turn-error { padding: 8px 0; font-size: 12px; color: var(--st-muted); }
+.st-turn-error button { color: var(--st-path); cursor: pointer; border: 0; background: transparent; padding: 4px; }
+.st-running-status { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; border: 1px solid var(--st-line); border-radius: 14px; background: var(--st-soft); color: var(--st-muted); font-size: 12px; box-shadow: var(--dsw-elevation-soft); }
+.st-running-status > span { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+.st-running-status i { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--st-path); }
+.st .st-running-status button { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.st-native-interaction { --st-interaction-height: calc(var(--st-card-height, 360px) - var(--st-head-space, 70px) - 24px); max-height: var(--st-interaction-height); overflow: auto; border: 1px solid var(--st-line); border-radius: 16px; background: var(--st-bg); box-shadow: var(--dsw-elevation-panel); }
+.st-native-interaction:empty { display: none; }
+.st-native-interaction-content { min-width: 0; }
+.st-native-interaction :is([data-question-key], [data-plan-review-key]) { padding: 0; }
+.st-native-interaction [data-question-key] > section { max-height: var(--st-interaction-height); }
 .st-quote-popover {
   position: absolute;
   z-index: 12;
@@ -1033,9 +1054,36 @@ div:has(> div > [data-slot='conversation.hero.options'] > .st-native-start) {
   color: var(--st-ink);
   font: 14px/1.5 var(--dsw-font-family, system-ui);
 }
+.st-selection-actions {
+  position: absolute;
+  z-index: 13;
+  display: inline-flex;
+  max-width: calc(100% - 16px);
+  overflow: hidden;
+  border: 1px solid var(--st-line);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-l3, var(--st-pane));
+  box-shadow: var(--dsw-elevation-panel);
+  color: var(--st-ink);
+  font: 500 13px/1.5 var(--dsw-font-family, system-ui);
+}
+.st-selection-actions button {
+  border: 0;
+  background: transparent;
+  padding: 8px 12px;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.st-selection-actions button + button { border-left: 1px solid var(--st-line); }
+.st-selection-actions button:hover, .st-selection-actions button:focus-visible { background: var(--st-soft); }
+.st-selection-actions button:focus-visible { outline: 2px solid var(--st-accent); outline-offset: -3px; }
+.st-selection-actions button:disabled { opacity: 0.55; cursor: wait; }
 .st-quote-caption { display: flex; align-items: center; justify-content: space-between; padding: 4px 5px 5px; color: var(--st-muted); font-size: 11px; }
 .st-quote-caption button { display: grid; place-items: center; cursor: pointer; border: 0; border-radius: 6px; padding: 4px; background: transparent; color: inherit; }
 .st-quote-caption button:hover { background: var(--st-soft); }
+.st-quote-popover:not(:has([data-composer-input])):not(:has([role='alert'])) { visibility: hidden; pointer-events: none; }
 
 .st .st-canvas-tools {
   gap: 4px;

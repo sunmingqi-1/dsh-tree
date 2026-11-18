@@ -1,14 +1,29 @@
-import { readTurn, type Turn, type Anchor } from './tree'
+import { readTurn, isUserPrompt, type Turn, type Anchor } from './tree'
 import { NativeDrafts } from './nativeDrafts'
+import { NativeTurns, NativeInteractions } from './nativeState'
 export class Study {
   composers = new NativeDrafts(this)
+  turns = new NativeTurns()
+  interactions = new NativeInteractions(this)
+  private answerSources = new Map<string, any>()
+  answerSource(id: string) {
+    if (!this.answerSources.has(id)) {
+      const listeners = new Set<() => void>()
+      this.answerSources.set(id, {
+        subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener) },
+        getSnapshot: () => this.answers.get(id) || '',
+        emit: () => { for (const listener of listeners) listener() },
+      })
+    }
+    return this.answerSources.get(id)
+  }
   version = 0
   enabled = false
   creating = false
   pendingSession: string | null = null
   pendingStop = () => {}
   nativeTarget: string | null = null
-  readerTarget: { parentId: string; sessionId: string } | null = null
+  // Keep existing temporary IDs out of the workspace list after upgrading.
   readerDrafts = (() => {
     try {
       return JSON.parse(localStorage.getItem('dsh-study-tree:reader-drafts') || '{}')
@@ -16,7 +31,6 @@ export class Study {
       return {}
     }
   })()
-  private nativePending = new Set<string>()
   active: string | null = null
   navigation: { id: string | null; revision: number } | null = null
   workspaceId: string | undefined
@@ -70,7 +84,7 @@ export class Study {
           const message = binding.eventSource
             .getSnapshot()
             .entries.find(
-              ({ event }) => event.type === 'user/message' && event.data.source?.rpcId,
+              ({ event }) => isUserPrompt(event),
             )?.event
           if (!message) return
           saving = true
@@ -219,8 +233,7 @@ export class Study {
     try {
       const sessionId = parent
         ? await this.ctx.sessions.fork({
-            sessionId: this.readerTarget?.parentId === parent.id
-              ? this.readerTarget.sessionId : parent.sessionId,
+            sessionId: parent.sessionId,
             atSeq: parent.endSeq,
           })
         : await this.ctx.sessions.create({ workspaceId: this.workspaceId })
@@ -258,94 +271,6 @@ export class Study {
           error: String(e.message || e),
         })
       throw e
-    }
-  }
-  // The restored native composer keeps its commands, attachments and submission
-  // pipeline. Record messages it accepts as nodes rather than hiding new turns.
-  // If this source already continued, give the native reader an exact-boundary
-  // fork first so asking from an older card cannot inherit later descendants.
-  followNative(parent: Turn) {
-    let stopped = false,
-      off = () => {},
-      reference
-    const start = async () => {
-      this.readerTarget = null
-      this.emit()
-      let sessionId = this.readerDrafts[parent.id]
-      if (!this.ctx.sessions.list.getSnapshot().byId[sessionId]) sessionId = parent.sessionId
-      reference = this.ctx.sessions.retain(sessionId, { source: 'studyTree' })
-      let binding = await reference.ready
-      await binding.session.loadThrough(parent.endSeq)
-      if (stopped) return
-      const continued = this.nodes.some(n =>
-        n.sessionId === sessionId && n.id !== parent.id && (n.endSeq ?? Infinity) > parent.endSeq,
-      ) || binding.eventSource.getSnapshot().entries.some(({ event }) =>
-        event.type === 'user/message' && event.seq > parent.endSeq,
-      )
-      if (continued) {
-        sessionId = await this.ctx.sessions.fork({ sessionId, atSeq: parent.endSeq })
-        this.readerDrafts[parent.id] = sessionId
-        try {
-          localStorage.setItem('dsh-study-tree:reader-drafts', JSON.stringify(this.readerDrafts))
-        } catch {}
-        if (stopped) return
-        reference.release()
-        reference = this.ctx.sessions.retain(sessionId, { source: 'studyTree' })
-        binding = await reference.ready
-        if (stopped) return
-      }
-      this.readerTarget = { parentId: parent.id, sessionId }
-      this.showSession(sessionId)
-      this.emit()
-      const baseline = binding.eventSource.getSnapshot().entries.reduce(
-        (seq, { event }) => Math.max(seq, event.seq), parent.endSeq,
-      )
-      const read = () => {
-        if (stopped || !this.enabled) return
-        const message = binding.eventSource.getSnapshot().entries.find(({ event }) =>
-          event.type === 'user/message' && event.seq > baseline && event.data.source?.rpcId,
-        )?.event
-        if (!message || this.nodes.some(n => n.sessionId === sessionId && n.requestId === message.data.source.rpcId)) return
-        const requestId = message.data.source.rpcId
-        if (this.nativePending.has(requestId)) return
-        this.nativePending.add(requestId)
-        void this.save({
-          id: crypto.randomUUID(),
-          treeId: parent.treeId,
-          parentId: parent.id,
-          question: message.data.content.filter(p => p.type === 'text').map(p => p.text).join('\n') || '阅读附件',
-          anchor: null,
-          created: Date.now(),
-          sessionId,
-          requestId,
-          endSeq: null,
-          status: 'sending',
-          error: null,
-          revision: 0,
-        })
-          .then(node => {
-            this.watch(node)
-            if (!stopped) this.open(node.id)
-          })
-          .catch(error => {
-            this.error = error.message
-            this.emit()
-          })
-          .finally(() => this.nativePending.delete(requestId))
-      }
-      off = binding.eventSource.subscribe(read)
-      read()
-    }
-    void start().catch(error => {
-      if (!stopped) {
-        this.error = error.message
-        this.emit()
-      }
-    })
-    return () => {
-      stopped = true
-      off()
-      reference?.release()
     }
   }
   observe(turns: Turn[], path: Turn[]) {
@@ -421,7 +346,10 @@ export class Study {
           for (const { event } of entries) {
             if (event.type === 'turn/start') turnNumber = event.data.turn
             if (event.type === 'user/message' && event.data.source?.rpcId === n.requestId) {
-              if (turnNumber !== undefined) this.turnNumbers.set(n.id, turnNumber)
+              if (turnNumber !== undefined && this.turnNumbers.get(n.id) !== turnNumber) {
+                this.turnNumbers.set(n.id, turnNumber)
+                this.emit()
+              }
               break
             }
           }
@@ -462,7 +390,7 @@ export class Study {
                 }
               })
           }
-          this.emit()
+          this.answerSource(n.id).emit()
         }
         // Coalesce stream tokens before folding history and parsing Markdown.
         off = binding.eventSource.subscribe(() => {

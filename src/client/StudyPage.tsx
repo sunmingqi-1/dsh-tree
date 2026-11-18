@@ -7,6 +7,7 @@ import React, {
   useReducer,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react'
 import {
   GitBranch,
@@ -40,6 +41,9 @@ import { NativeComposerSeat } from './NativeComposer'
 import { CanvasTools } from './CanvasTools'
 import { CanvasMiniMap } from './CanvasMiniMap'
 import { rasterPolicy, headerRasterScale } from './raster'
+import { NativeTurnSeat } from './NativeTurn'
+import { useNodePending, NativeInteractionSeat, RunningStatus } from './NativeInteraction'
+import { DEFAULT_CARD_SIZE, MIN_CARD_SIZE } from './cardSize'
 
 const UI = createContext<any>(null)
 const Interaction = createContext<any>(null)
@@ -63,8 +67,16 @@ const Body = React.memo(function Body({ n, text }: { n: Turn; text: string }) {
     </div>
   )
 })
+function Answer({ study, n }) {
+  const source = study.answerSource(n.id)
+  const text = useSyncExternalStore(source.subscribe, source.getSnapshot)
+  return <NativeTurnSeat study={study} node={n}><Body n={n} text={text || n.error || study.issues.get(n.id) ||
+    (study.answers.has(n.id) && n.status === 'complete' ? '本轮没有文本回复' : states[n.status])} /></NativeTurnSeat>
+}
 function Composer({ id }) {
   const ui = useContext(UI)
+  const node = ui.byId.get(id)
+  const pending = useNodePending(ui.study, node)
   const ref = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
     const element = ref.current, card = element?.closest<HTMLElement>('.st-card')
@@ -73,22 +85,39 @@ function Composer({ id }) {
     observer.observe(element)
     return () => { observer.disconnect(); card.style.removeProperty('--st-composer-space') }
   }, [])
-  return <div ref={ref} className="st-card-composer"><NativeComposerSeat study={ui.study} parent={ui.byId.get(id)} /></div>
+  return <div ref={ref} className="st-card-composer">{pending
+    ? <NativeInteractionSeat study={ui.study} node={node} />
+    : node.endSeq == null ? <RunningStatus study={ui.study} node={node} />
+    : <NativeComposerSeat study={ui.study} parent={node} />}</div>
 }
 function Card({ data, resizing: nodeResizing }) {
   const ui = useContext(UI),
     n: Turn = data.turn
   const interaction = useContext(Interaction)
   const active = n.id === ui.active
+  const pending = useNodePending(ui.study, n)
   const customSize = ui.prefs.dimensions[n.id]
-  const text = ui.study.answers.get(n.id) || ''
   const card = useRef<HTMLElement>(null)
   const header = useRef<HTMLElement>(null)
   const flowStore = useStoreApi()
+  useEffect(() => {
+    const body = card.current?.querySelector<HTMLElement>('.st-body')
+    if (!body || n.endSeq !== null) return
+    let pinned = true, frame = 0
+    const scroll = () => { pinned = body.scrollHeight - body.clientHeight - body.scrollTop < 40 }
+    const observer = new MutationObserver(() => {
+      if (!pinned || frame) return
+      frame = requestAnimationFrame(() => { frame = 0; if (pinned) body.scrollTop = body.scrollHeight })
+    })
+    body.addEventListener('scroll', scroll)
+    observer.observe(body, { childList: true, subtree: true, characterData: true })
+    return () => { observer.disconnect(); body.removeEventListener('scroll', scroll); cancelAnimationFrame(frame) }
+  }, [n.id, n.endSeq])
   useLayoutEffect(() => {
     if (!card.current) return
     const observer = new ResizeObserver(([entry]) => {
       const size = entry.borderBoxSize?.[0]
+      card.current?.style.setProperty('--st-card-height', (size?.blockSize || card.current.offsetHeight) + 'px')
       ui.measure(n.id, {
         width: size?.inlineSize || card.current.offsetWidth,
         height: size?.blockSize || card.current.offsetHeight,
@@ -108,12 +137,15 @@ function Card({ data, resizing: nodeResizing }) {
     <article
       ref={card}
       className={'st-card ' + (active ? 'active ' : '') + (customSize || nodeResizing ? 'sized ' : '') + (ui.pathIds.has(n.id) ? 'onpath' : '')}
-      onClick={() => ui.pick(n)}
+      onClick={(event) => {
+        if (event.target.closest('[data-answer]') && !window.getSelection()?.isCollapsed) return
+        ui.pick(n)
+      }}
     >
       <NodeResizer
         isVisible={active}
-        minWidth={420}
-        minHeight={300}
+        minWidth={MIN_CARD_SIZE.width}
+        minHeight={MIN_CARD_SIZE.height}
         onResizeStart={() => interaction.begin(n.id, 'resize')}
         onResizeEnd={(_, size) => interaction.finish(n.id, size)}
       />
@@ -125,7 +157,8 @@ function Card({ data, resizing: nodeResizing }) {
           {n.parentId ? (n.anchor ? '引用追问' : '追问') : '学习起点'}
         </span>
         <h3 className="st-question nodrag nopan nowheel" title={n.question}>{n.question}</h3>
-        {n.status === 'sending' || n.status === 'preparing' ? <span className="st-generating">生成中</span> : null}
+        {pending ? <span className="st-generating">{pending.kind === 'approval' ? '等待审批' : '等待回答'}</span>
+          : n.status === 'sending' || n.status === 'preparing' ? <span className="st-generating">生成中</span> : null}
         <GripHorizontal className="st-drag-hint" size={14} aria-hidden />
         </div>
           {n.anchor && (
@@ -143,17 +176,7 @@ function Card({ data, resizing: nodeResizing }) {
       </header>
           <div className="st-answer-region">
           <div className="st-body nodrag nopan nowheel">
-            <Body
-              n={n}
-              text={
-                text ||
-                n.error ||
-                ui.study.issues.get(n.id) ||
-                (ui.study.answers.has(n.id) && n.status === 'complete'
-                  ? '本轮没有文本回复'
-                  : states[n.status])
-              }
-            />
+            <Answer study={ui.study} n={n} />
           </div>
           {n.versionOf && ui.byId.has(n.versionOf) && (
             <button
@@ -166,7 +189,6 @@ function Card({ data, resizing: nodeResizing }) {
               查看原问题 ↗
             </button>
           )}
-          {n.error && text && <small>{n.error}</small>}
           </div>
           {active && <Composer key={n.id} id={n.id} />}
       <Handle type="source" position={Position.Bottom} />
@@ -332,11 +354,8 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
   }, [active])
   const nativeSessionId = byId.get(active)?.sessionId
   useEffect(() => {
-    const node = byId.get(active)
-    if (!nativeSessionId) return
-    if (node.endSeq == null) { study.showSession(nativeSessionId); return }
-    return study.followNative(node)
-  }, [active, nativeSessionId, byId.get(active)?.endSeq, nativeRevision])
+    if (nativeSessionId) study.showSession(nativeSessionId)
+  }, [active, nativeSessionId, nativeRevision])
   useEffect(() => {
     study.hideReader = () => patch({ reader: false })
     return () => {
@@ -498,6 +517,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     const parent = byId.get(n.parentId)
     if (!parent) return
     focus(parent)
+    study.turns.reveal.get(parent.id)?.()
     field('expanded', parent.id, true)
     requestAnimationFrame(() => {
       const body = root.current?.querySelector('.st-card [data-answer="' + parent.id + '"]')
@@ -531,7 +551,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     }
   }
   function capture(e, context) {
-    if (e.target.closest('.st-native-composer, .st-quote-popover')) return
+    if (e.target.closest('.st-native-composer, .st-quote-popover, .st-selection-actions')) return
     const s = window.getSelection()
     if (!s?.rangeCount || s.isCollapsed) {
       if (!e.target.closest('.st-quote-popover')) setSelection(null)
@@ -540,6 +560,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     const range = s.getRangeAt(0),
       body = range.startContainer.parentElement?.closest('[data-answer]')
     if (!body || !nativeFrame.contains(body)) return
+    if (byId.get(body.dataset.answer)?.endSeq == null) return
     const anchor = selectionAt(body, range)
     if (!anchor) return
     if (context) e.preventDefault()
@@ -549,9 +570,11 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
       id: body.dataset.answer,
       anchor,
       range: range.cloneRange(),
+      mode: 'actions',
       focus: context,
       x: Math.max(8, Math.min(rect.left - bounds.left, bounds.width - 420)),
-      y: Math.max(8, Math.min(rect.bottom - bounds.top + 8, bounds.height - 220)),
+      y: Math.max(8, Math.min(rect.top - bounds.top - 44, bounds.height - 44)),
+      branchY: Math.max(8, Math.min(rect.bottom - bounds.top + 8, bounds.height - 220)),
     })
   }
   useLayoutEffect(() => {
@@ -563,6 +586,33 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     if (selection?.range) registry.set('study-tree-quote', new Highlight(selection.range))
     return () => registry.delete('study-tree-quote')
   }, [selection])
+  useEffect(() => {
+    if (selection?.mode !== 'added') return
+    const focus = () => {
+      const input = nativeFrame.querySelector(`.react-flow__node[data-id="${CSS.escape(selection.id)}"] [data-study-composer="card"] [data-composer-input]`)
+      if (!input) return false
+      input.focus({ preventScroll: true })
+      return true
+    }
+    if (focus()) return
+    const observer = new MutationObserver(() => { if (focus()) observer.disconnect() })
+    observer.observe(nativeFrame, { childList: true, subtree: true })
+    const timer = setTimeout(() => observer.disconnect(), 5000)
+    return () => { clearTimeout(timer); observer.disconnect() }
+  }, [selection?.mode, selection?.id, nativeFrame])
+  async function addSelection() {
+    const current = selection, node = byId.get(current.id)
+    if (!node) return
+    setSelection({ ...current, mode: 'adding' })
+    select(node)
+    try {
+      await study.composers.addToCard(node, current.anchor)
+      setSelection(value => value?.range === current.range ? { ...value, mode: 'added' } : value)
+    } catch (error) {
+      setError(error.message)
+      setSelection(value => value?.range === current.range ? { ...value, mode: 'actions' } : value)
+    }
+  }
   const nodes = React.useMemo(
     () =>
       turns.map((n) => ({
@@ -572,7 +622,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
         dragHandle: '.st-grip',
         position: positions[n.id],
         selected: n.id === active,
-        style: prefs.dimensions[n.id] ? { ...prefs.dimensions[n.id] } : { width: 560, height: 360 },
+        style: prefs.dimensions[n.id] ? { ...prefs.dimensions[n.id] } : { ...DEFAULT_CARD_SIZE },
       })),
     [turns, positions, active, prefs.dimensions],
   )
@@ -650,7 +700,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
         className="st"
         ref={root}
         onMouseUp={(e) => {
-          if (!e.target.closest('.st-quote-popover, .st-native-composer')) capture(e, false)
+          if (!e.target.closest('.st-quote-popover, .st-native-composer, .st-selection-actions')) capture(e, false)
         }}
         onContextMenuCapture={(e) => {
           if (e.target.closest('[data-answer]')) {
@@ -862,11 +912,20 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
             },
           }}
           onQuote={(event) => capture(event, true)}
-          inputReady={byId.get(active)?.endSeq != null && study.readerTarget?.parentId === active && study.readerTarget?.sessionId === nativeSessionKey}
         />
-        {selection &&
+        {selection && selection.mode !== 'added' &&
           createPortal(
-            <div
+            selection.mode !== 'branch' ? <div
+              className="st-selection-actions nodrag nopan nowheel"
+              role="toolbar"
+              aria-label="选中文字操作"
+              style={{ left: selection.x, top: selection.y }}
+              onMouseDown={event => event.preventDefault()}
+              onClick={event => event.stopPropagation()}
+            >
+              <button type="button" disabled={selection.mode === 'adding'} onClick={addSelection}>添加到对话</button>
+              <button type="button" disabled={selection.mode === 'adding'} onClick={() => setSelection(value => ({ ...value, mode: 'branch', y: value.branchY, focus: true }))}>在分支中提问</button>
+            </div> : <div
               className="st-quote-popover"
               role="dialog"
               aria-label="引用追问"

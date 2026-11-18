@@ -21,31 +21,19 @@ function savedFolds() {
 }
 
 // The native browser owns grouping, search, sorting, and ordinary Session rows.
-// Elect one visible row per learning tree so native row paging cannot hide its root.
+// Each canonical root occupies one row in the native browser's projected list.
 export function WorkspaceTree({
   study,
   sessionId,
-  representatives,
   renderFactorySlot,
   useContextMenu,
-  useSessions,
 }) {
   useStudy(study)
-  const sessions = useSessions((state) => state)
   const { getTriggerProps } = useContextMenu()
-  const node = study.nodes.find((item) => item.sessionId === sessionId)
-  const workspaces = study.ctx.workspaces.list.getSnapshot().items
-  const groupOf = (treeId) => {
-    const root = study.nodes.find((item) => item.id === treeId)
-    return (
-      workspaces.find((workspace) => workspace.sessionIds.includes(root?.sessionId))?.workspaceId ||
-      ''
-    )
-  }
-  const group = node ? groupOf(node.treeId) : ''
+  const node = study.nodes.find((item) => !item.parentId && item.sessionId === sessionId)
   const [folds, setFolds] = useState(savedFolds)
   const rootRef = useRef<HTMLSpanElement>(null)
-  const elected = !!node && representatives.get(group)?.values().next().value === sessionId
+  const elected = !!node
   useLayoutEffect(() => {
     const row = rootRef.current?.closest<HTMLElement>('[data-row-key]')
     if (!elected || !row) return
@@ -63,18 +51,6 @@ export function WorkspaceTree({
       }
     }
   }, [elected])
-  useLayoutEffect(() => {
-    if (!node) return
-    let members = representatives.get(group)
-    if (!members) representatives.set(group, (members = new Set()))
-    members.add(sessionId)
-    study.emit()
-    return () => {
-      members.delete(sessionId)
-      if (!members.size) representatives.delete(group)
-      study.emit()
-    }
-  }, [!!node, group, sessionId])
   useEffect(() => {
     const update = () => setFolds(savedFolds())
     window.addEventListener('storage', update)
@@ -84,28 +60,8 @@ export function WorkspaceTree({
       window.removeEventListener('study-tree-folds', update)
     }
   }, [])
-  if (!node) return [...Object.values(study.readerDrafts), ...Object.values(study.composers.sessions)].includes(sessionId) ? <span className="st-tree-member" /> : null
-  if (representatives.get(group)?.values().next().value !== sessionId)
-    return <span className="st-tree-member" />
-  const trees = new Set(
-    study.nodes
-      .filter((item) => !item.parentId && groupOf(item.id) === group)
-      .map((item) => item.id),
-  )
-  const turns = study.nodes.filter((item) => trees.has(item.treeId))
-  const workspaceState = study.ctx.workspaces.list.getSnapshot()
-  const members = group
-    ? workspaceState.items.find((workspace) => workspace.workspaceId === group)?.sessionIds || []
-    : sessions.ids.filter(
-        (id) => !workspaceState.items.some((workspace) => workspace.sessionIds.includes(id)),
-      )
-  const learningSessions = new Set(study.nodes.map((item) => item.sessionId))
-  const hasOtherSessions = members.some(
-    (id) =>
-      !learningSessions.has(id) &&
-      sessions.byId[id]?.blank === false &&
-      !workspaceState.archivedSessionIds.includes(id),
-  )
+  if (!elected) return null
+  const turns = study.nodes.filter((item) => item.treeId === node.treeId)
   const children = new Map<string | null, typeof turns>()
   for (const turn of turns) {
     const rows = children.get(turn.parentId) || []
@@ -144,7 +100,7 @@ export function WorkspaceTree({
             style={{ paddingLeft: 6 + depth * 15 }}
             {...getTriggerProps({
               kind: 'session',
-              value: { sessionId: turn.sessionId, displayTitle: turn.question },
+              value: { sessionId: turn.sessionId, displayTitle: turn.question, studyNodeId: turn.id },
             })}
           >
             <button
@@ -174,7 +130,7 @@ export function WorkspaceTree({
                 renderFactorySlot('contextMenu.button', {
                   target: {
                     kind: 'session',
-                    value: { sessionId: turn.sessionId, displayTitle: turn.question },
+                    value: { sessionId: turn.sessionId, displayTitle: turn.question, studyNodeId: turn.id },
                   },
                   label: '节点操作：' + turn.question,
                 })}
@@ -200,9 +156,6 @@ export function WorkspaceTree({
         event.stopPropagation()
       }}
     >
-      {!hasOtherSessions && (
-        <style>{'[data-row-key="overflow:' + CSS.escape(group) + '"]{display:none}'}</style>
-      )}
       {render(null, 0)}
     </span>
   )

@@ -4,6 +4,10 @@ export interface Anchor {
   prefix: string
   suffix: string
 }
+export function isUserPrompt(event) {
+  const source = event.data?.source
+  return event.type === 'user/message' && !!source?.rpcId && (!source.kind || source.kind === 'user')
+}
 export interface Turn {
   title?: string
   versionOf?: string
@@ -37,35 +41,82 @@ export function pathTo(nodes: Turn[], id: string | null): Turn[] {
 export function readTurn(entries, requestId: string) {
   let startTurn = null
   let matched = false
-  let answer = ''
   let endSeq = null
   let reason = null
+  let currentStep = 0
+  const steps = new Map<number, {
+    blocks: Map<number, string>
+    attemptId: string | undefined
+    settled: boolean
+  }>()
+  const stepState = (step: number) => {
+    let state = steps.get(step)
+    if (!state) {
+      state = { blocks: new Map(), attemptId: undefined, settled: false }
+      steps.set(step, state)
+    }
+    return state
+  }
   for (const { event } of entries) {
     const { type, data } = event
     if (type === 'turn/start') {
+      // Once the request is located, its boundary never moves to a later turn.
+      if (matched) break
       startTurn = data.turn
-      matched = false
+      currentStep = 0
     }
     if (type === 'user/message' && data.source?.rpcId === requestId) matched = true
-    if (!matched) continue
-    if (type === 'assistant/message' && data.turn === startTurn) {
-      const text = data.message.content
-        .filter((b) => b.type === 'text')
-        .map((b) => b.text)
-        .join('')
-      if (text) answer += (answer ? '\n\n' : '') + text
-    }
-    if (
-      type === 'assistant/live-chunk' &&
-      data.turn === startTurn &&
-      data.chunk.type === 'text-delta'
-    )
-      answer += data.chunk.text
-    if (type === 'turn/end' && data.turn === startTurn) {
+    if (!matched || data.turn !== startTurn) continue
+    if (type === 'turn/end') {
       endSeq = event.seq
       reason = data.reason
       break
     }
+    if (type === 'step/start') {
+      currentStep = data.step
+      stepState(currentStep)
+      continue
+    }
+    if (type !== 'assistant/message' && type !== 'assistant/live-chunk'
+      && type !== 'assistant/attempt' && type !== 'llm/retry') continue
+    const state = stepState(data.step ?? currentStep)
+    if (type === 'assistant/message') {
+      // Native Chat only treats append messages as Assistant settlements.
+      if (event.surfaceOp !== undefined && event.surfaceOp !== 'append') continue
+      // The successful attempt's live rows may remain until step/end. The
+      // durable message replaces those blocks; it is not another paragraph.
+      state.blocks = new Map(data.message.content.flatMap((block, index) =>
+        block.type === 'text' ? [[index, block.text]] : []))
+      state.settled = true
+      continue
+    }
+    if (type === 'assistant/attempt' || type === 'llm/retry') {
+      // Failed attempts commit no visible message. Retry resets this Step,
+      // while preceding Steps remain readable.
+      state.blocks.clear()
+      state.attemptId = undefined
+      state.settled = false
+      continue
+    }
+    if (state.settled) continue
+    if (state.attemptId !== data.attemptId) {
+      state.blocks.clear()
+      state.attemptId = data.attemptId
+    }
+    const chunk = data.chunk
+    const index = chunk.index ?? 0
+    if (chunk.type === 'text-delta') {
+      state.blocks.set(index, (state.blocks.get(index) ?? '') + chunk.text)
+    } else if (chunk.type === 'block-end' && chunk.block.type === 'text') {
+      state.blocks.set(index, chunk.block.text)
+    } else if (chunk.type === 'block-start' || chunk.type === 'block-end'
+      || chunk.type === 'reasoning-delta' || chunk.type === 'tool-call-delta') {
+      state.blocks.delete(index)
+    }
   }
+  const answer = [...steps.values()]
+    .map(state => [...state.blocks].sort(([a], [b]) => a - b).map(([, text]) => text).join(''))
+    .filter(Boolean)
+    .join('\n\n')
   return { answer, endSeq, reason }
 }

@@ -1,6 +1,6 @@
 {
   "name": "dsh-study-tree",
-  "version": "0.6.4",
+  "version": "0.8.0",
   "description": "DeepSeek Harness 树形学习工作台",
   "private": true,
   "type": "module",
@@ -34,6 +34,8 @@
         "@deepseek-ai/dsh-client-ui-workspace",
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-chat",
+        "@deepseek-ai/dsh-client-ui-user-questions",
+        "@deepseek-ai/dsh-client-ui-approval",
         "@deepseek-ai/dsh-client-ui-context-menu",
         "@deepseek-ai/dsh-client-ui-session"
       ]
@@ -46,10 +48,12 @@
   },
   "devDependencies": {
     "@dagrejs/dagre": "^1.1.5",
+    "@deepseek-ai/dsh-util-workspace-path": "0.2.2-rc.3",
     "@xyflow/react": "^12.8.0",
     "esbuild": "^0.25.0",
     "katex": "^0.16.47",
     "lucide-react": "^0.468.0",
+    "playwright-core": "1.65.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
