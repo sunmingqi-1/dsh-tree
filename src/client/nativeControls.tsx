@@ -5,13 +5,13 @@ export const controlSeat = (name: string) => 'studyTree.card.' + name
 
 // DSH allows each slot to have one declaring owner. Mirror the live native
 // registrations into plugin-owned seats, retaining their components, injection,
-// locale and stores. Every editor gets a distinct prepared Session binding.
+// locale and stores.
 // This adapter is pinned to the DSH version declared in package.json.
-export function mirrorNativeControl(ctx, source: string, exclude?: (entry: any) => boolean, transform?: (component: any) => any) {
-  return ctx.slots.inject(controlSeat(source), () => mirrorActiveControl(ctx, source, exclude, transform))
+export function mirrorNativeControl(ctx, source: string, exclude?: (entry: any) => boolean, transform?: (component: any) => any, seat = controlSeat) {
+  return ctx.slots.inject(seat(source), () => mirrorActiveControl(ctx, source, exclude, transform, seat))
 }
 
-function mirrorActiveControl(ctx, source: string, exclude?: (entry: any) => boolean, transform?: (component: any) => any) {
+function mirrorActiveControl(ctx, source: string, exclude, transform, seat) {
   let disposed = false
   const registrations = new Map<any, () => void>()
   let previous = null
@@ -32,9 +32,10 @@ function mirrorActiveControl(ctx, source: string, exclude?: (entry: any) => bool
     for (const entry of entries) {
       if (exclude?.(entry) || registrations.has(entry)) continue
       const stops: (() => void)[] = []
-      const session = source === 'conversation.composer.bar' ? ctx.slots.entries('conversation.session')[0] : null
+      const session = source === 'conversation.composer.bar' && seat === controlSeat
+        ? ctx.slots.entries('conversation.session')[0] : null
       const children = Object.fromEntries(
-        Object.entries(entry.children || {}).map(([name, spec]) => [controlSeat(name), spec]),
+        Object.entries(entry.children || {}).map(([name, spec]) => [seat(name), spec]),
       )
       const Component = transform ? transform(entry.component) : entry.component
       const render = (props) => (
@@ -44,8 +45,8 @@ function mirrorActiveControl(ctx, source: string, exclude?: (entry: any) => bool
             'conversation.input.permission', 'conversation.input.plan', 'conversation.input.left',
             'conversation.input.right', 'conversation.input.model', 'conversation.input.activity',
             'conversation.composer.dock',
-          ].includes(name) ? null : props.renderSlot(controlSeat(name), owner, options)}
-          renderSlotChain={(name, owner, options) => props.renderSlotChain(controlSeat(name), owner, options)}
+          ].includes(name) ? null : props.renderSlot(seat(name), owner, options)}
+          renderSlotChain={(name, owner, options) => props.renderSlotChain(seat(name), owner, options)}
         />
       )
       const Adapter = source !== 'conversation.composer.bar' ? render : function NativeInput(props) {
@@ -71,12 +72,12 @@ function mirrorActiveControl(ctx, source: string, exclude?: (entry: any) => bool
       }
       stops.push(register(
         {
-          name: controlSeat(source), ...entry.options,
+          name: seat(source), ...entry.options,
           select: entry.select,
           children,
           inject: session ? (sessionId, actions) => ({
             ...entry.inject(sessionId),
-            bindDraftPersistence: sessionId === undefined ? undefined : session.inject(sessionId, actions).bindDraftPersistence,
+            bindDraftPersistence: session.inject(sessionId, actions).bindDraftPersistence,
           }) : entry.inject,
           store: session?.store || entry.store,
           locale: entry.locale,
@@ -84,7 +85,7 @@ function mirrorActiveControl(ctx, source: string, exclude?: (entry: any) => bool
         Adapter,
       ))
       for (const name of Object.keys(entry.children || {}))
-        stops.push(mirrorNativeControl(ctx, name))
+        stops.push(mirrorNativeControl(ctx, name, undefined, undefined, seat))
       registrations.set(entry, () => { for (const stop of stops.reverse()) stop() })
     }
   }

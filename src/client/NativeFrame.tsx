@@ -30,8 +30,7 @@ export function NativeFrame({ study, useSessions, usePanelInfo }) {
     else if (
       !study.nativeTarget &&
       current?.sessionId &&
-      current.sessionId !== selectedSession.id &&
-      study.readerTarget?.sessionId !== selectedSession.id
+      current.sessionId !== selectedSession.id
     ) {
       study.enabled = false
       study.emit()
@@ -65,27 +64,16 @@ export function NativeBoundary({
   width,
   readingState,
   onQuote,
-  inputReady,
 }) {
   const signature = path.map((node) => node.id + ':' + study.turnNumbers.get(node.id)).join(',')
   useLayoutEffect(() => {
     frame.dataset.studyReader = String(visible)
     frame.style.setProperty('--st-reader-width', width + 'px')
+    if (study.composers.readerVisible !== visible) {
+      study.composers.readerVisible = visible
+      study.composers.emit()
+    }
   }, [frame, visible, width])
-  useLayoutEffect(() => {
-    const native = frame.querySelector('[data-slot="main.conversation"] > :first-child')
-    if (!native) return
-    const update = () => {
-      for (const seat of native.querySelectorAll<HTMLElement>('[data-composer-seat]')) seat.inert = !inputReady
-    }
-    update()
-    const observer = new MutationObserver(update)
-    observer.observe(native, { childList: true, subtree: true })
-    return () => {
-      observer.disconnect()
-      for (const seat of native.querySelectorAll<HTMLElement>('[data-composer-seat]')) seat.inert = false
-    }
-  }, [frame, sessionKey, inputReady])
   useLayoutEffect(() => {
     const native = frame.querySelector<HTMLElement>(
       '[data-slot="main.conversation"] > :first-child',

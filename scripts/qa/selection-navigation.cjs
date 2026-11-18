@@ -82,6 +82,14 @@ const { chromium } = require('playwright-core')
       await page.locator('.st-quote-popover [data-composer-input][contenteditable=true]').waitFor()
       assert.ok(await page.evaluate(() => CSS.highlights.has('study-tree-quote')))
     }
+    await select(0, false)
+    const beforeOpening = await page.evaluate(() => Object.keys(JSON.parse(localStorage.getItem('dsh-study-tree:composer-drafts') || '{}')).length)
+    assert.equal(beforeOpening, before.drafts, 'selecting text alone must not fork')
+    await page.getByRole('button', { name: '在分支中提问', exact: true }).click()
+    await page.locator('.st-quote-popover [data-composer-input][contenteditable=true]').waitFor()
+    await page.keyboard.press('Escape')
+    // The initial explicit fork can publish a change to the native catalog.
+    await page.evaluate(() => { selectionProbe.observer.takeRecords(); selectionProbe.changes = 0 })
     for (let i = 0; i < 3; i++) {
       await select(i)
       const editor = page.locator('.st-quote-popover [data-composer-input]')
@@ -126,13 +134,13 @@ const { chromium } = require('playwright-core')
       }
     })
     assert.equal(after.changes, 0, 'selection must not rebuild sidebar rows')
-    assert.equal(after.drafts, before.drafts, 'selection must not create new draft sessions')
+    assert.equal(after.drafts, before.drafts + 1, 'reopening the explicit fork reuses its unused Session')
     assert.deepEqual(after.rows, before.rows)
     assert.equal(after.preparing, 0, 'no visible gray preparation placeholder')
     assert.equal(after.incomplete, 0, 'popup first appears with its complete native editor')
     assert.deepEqual(errors, [])
     console.log(
-      'two selection actions; add-to-card preserves draft/focus/highlight without sending; branch popup complete; zero sidebar mutations/new sessions; PASS',
+      'selection and adding a quote create no fork; explicit branch editor creates one reusable fork; complete popup and stable sidebar; PASS',
     )
   } finally {
     await browser.close()

@@ -1018,6 +1018,11 @@ div:has(> div > [data-slot='conversation.hero.options'] > .st-native-start) {
 .st-composer-notice { padding: 6px 10px; font-size: 12px; color: var(--st-muted); }
 .st-native-preparing { min-height: 80px; box-sizing: border-box; border-radius: var(--dsw-radius-panel, 24px); padding: 16px; background: var(--st-soft); color: var(--st-muted); font-size: 13px; }
 .st-native-preparing button { margin-left: 8px; }
+.st-history-composer { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 12px; background: var(--st-soft); }
+.st-history-composer span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--st-muted); }
+.st-history-composer button { flex-shrink: 0; }
+.st-reader-input-hint, .st-shared-input-switch { color: var(--st-muted); font-size: 12px; padding: 6px 10px; }
+.st-shared-input-switch { border: 1px solid var(--st-line); border-radius: 8px; background: var(--st-soft); cursor: pointer; }
 .st-native-turn { min-width: 0; overflow-wrap: anywhere; user-select: text; cursor: text; }
 .st-native-turn[data-native-ready='true'] > .st-md { display: none; }
 .st-native-turn:not([data-native-ready='true']) > .st-turn-flow { display: none; }

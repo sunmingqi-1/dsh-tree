@@ -23,7 +23,7 @@ export class Study {
   pendingSession: string | null = null
   pendingStop = () => {}
   nativeTarget: string | null = null
-  readerTarget: { parentId: string; sessionId: string } | null = null
+  // Keep existing temporary IDs out of the workspace list after upgrading.
   readerDrafts = (() => {
     try {
       return JSON.parse(localStorage.getItem('dsh-study-tree:reader-drafts') || '{}')
@@ -31,7 +31,6 @@ export class Study {
       return {}
     }
   })()
-  private nativePending = new Set<string>()
   active: string | null = null
   navigation: { id: string | null; revision: number } | null = null
   workspaceId: string | undefined
@@ -234,8 +233,7 @@ export class Study {
     try {
       const sessionId = parent
         ? await this.ctx.sessions.fork({
-            sessionId: this.readerTarget?.parentId === parent.id
-              ? this.readerTarget.sessionId : parent.sessionId,
+            sessionId: parent.sessionId,
             atSeq: parent.endSeq,
           })
         : await this.ctx.sessions.create({ workspaceId: this.workspaceId })
@@ -273,94 +271,6 @@ export class Study {
           error: String(e.message || e),
         })
       throw e
-    }
-  }
-  // The restored native composer keeps its commands, attachments and submission
-  // pipeline. Record messages it accepts as nodes rather than hiding new turns.
-  // If this source already continued, give the native reader an exact-boundary
-  // fork first so asking from an older card cannot inherit later descendants.
-  followNative(parent: Turn) {
-    let stopped = false,
-      off = () => {},
-      reference
-    const start = async () => {
-      this.readerTarget = null
-      this.emit()
-      let sessionId = this.readerDrafts[parent.id]
-      if (!this.ctx.sessions.list.getSnapshot().byId[sessionId]) sessionId = parent.sessionId
-      reference = this.ctx.sessions.retain(sessionId, { source: 'studyTree' })
-      let binding = await reference.ready
-      await binding.session.loadThrough(parent.endSeq)
-      if (stopped) return
-      const continued = this.nodes.some(n =>
-        n.sessionId === sessionId && n.id !== parent.id && (n.endSeq ?? Infinity) > parent.endSeq,
-      ) || binding.eventSource.getSnapshot().entries.some(({ event }) =>
-        event.type === 'user/message' && event.seq > parent.endSeq,
-      )
-      if (continued) {
-        sessionId = await this.ctx.sessions.fork({ sessionId, atSeq: parent.endSeq })
-        this.readerDrafts[parent.id] = sessionId
-        try {
-          localStorage.setItem('dsh-study-tree:reader-drafts', JSON.stringify(this.readerDrafts))
-        } catch {}
-        if (stopped) return
-        reference.release()
-        reference = this.ctx.sessions.retain(sessionId, { source: 'studyTree' })
-        binding = await reference.ready
-        if (stopped) return
-      }
-      this.readerTarget = { parentId: parent.id, sessionId }
-      this.showSession(sessionId)
-      this.emit()
-      const baseline = binding.eventSource.getSnapshot().entries.reduce(
-        (seq, { event }) => Math.max(seq, event.seq), parent.endSeq,
-      )
-      const read = () => {
-        if (stopped || !this.enabled) return
-        const message = binding.eventSource.getSnapshot().entries.find(({ event }) =>
-          isUserPrompt(event) && event.seq > baseline,
-        )?.event
-        if (!message || this.nodes.some(n => n.sessionId === sessionId && n.requestId === message.data.source.rpcId)) return
-        const requestId = message.data.source.rpcId
-        if (this.nativePending.has(requestId)) return
-        this.nativePending.add(requestId)
-        void this.save({
-          id: crypto.randomUUID(),
-          treeId: parent.treeId,
-          parentId: parent.id,
-          question: message.data.content.filter(p => p.type === 'text').map(p => p.text).join('\n') || '阅读附件',
-          anchor: null,
-          created: Date.now(),
-          sessionId,
-          requestId,
-          endSeq: null,
-          status: 'sending',
-          error: null,
-          revision: 0,
-        })
-          .then(node => {
-            this.watch(node)
-            if (!stopped) this.open(node.id)
-          })
-          .catch(error => {
-            this.error = error.message
-            this.emit()
-          })
-          .finally(() => this.nativePending.delete(requestId))
-      }
-      off = binding.eventSource.subscribe(read)
-      read()
-    }
-    void start().catch(error => {
-      if (!stopped) {
-        this.error = error.message
-        this.emit()
-      }
-    })
-    return () => {
-      stopped = true
-      off()
-      reference?.release()
     }
   }
   observe(turns: Turn[], path: Turn[]) {

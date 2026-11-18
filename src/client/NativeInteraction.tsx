@@ -45,18 +45,20 @@ function InteractionRouter(props) {
   })
   const owner = usePendingOwner(study, props.pendingInteraction)
   const seat = study.enabled && owner === study.active ? study.interactions.seats.get(owner) : null
+  const outsidePath = study.enabled && owner && owner !== study.active
   useLayoutEffect(() => {
     const key = props.pendingInteraction.key
     const leases = study.interactions.leases
     const main = home.current?.closest('[data-slot="main.conversation"]')
     if (main && (!leases.get(key)?.isConnected || leases.get(key) === host)) leases.set(key, host)
     const target = main && leases.get(key) === host && seat ? seat : home.current
+    host.hidden = !!main && !!outsidePath
     target?.appendChild(host)
     return () => {
       host.remove()
       if (leases.get(key) === host) leases.delete(key)
     }
-  }, [host, seat, sessionId, props.pendingInteraction.key])
+  }, [host, seat, sessionId, outsidePath, props.pendingInteraction.key])
   return (
     <>
       <div ref={home} className="st-interaction-home" />

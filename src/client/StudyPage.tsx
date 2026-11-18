@@ -353,13 +353,9 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     }
   }, [active])
   const nativeSessionId = byId.get(active)?.sessionId
-  const activePending = useNodePending(study, byId.get(active))
   useEffect(() => {
-    const node = byId.get(active)
-    if (!nativeSessionId) return
-    if (node.endSeq == null || activePending) { study.showSession(nativeSessionId); return }
-    return study.followNative(node)
-  }, [active, nativeSessionId, byId.get(active)?.endSeq, nativeRevision, activePending])
+    if (nativeSessionId) study.showSession(nativeSessionId)
+  }, [active, nativeSessionId, nativeRevision])
   useEffect(() => {
     study.hideReader = () => patch({ reader: false })
     return () => {
@@ -916,7 +912,6 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
             },
           }}
           onQuote={(event) => capture(event, true)}
-          inputReady={!!activePending || (byId.get(active)?.endSeq != null && study.readerTarget?.parentId === active && study.readerTarget?.sessionId === nativeSessionKey)}
         />
         {selection && selection.mode !== 'added' &&
           createPortal(

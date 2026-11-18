@@ -3,8 +3,8 @@ import { GitBranch } from 'lucide-react'
 import { Study } from './study'
 import { WorkspaceTree, NewStudyButton, useStudy } from './WorkspaceTree'
 import { NativeFrame } from './NativeFrame'
-import { NativeComposerBridge } from './NativeComposer'
-import { controlSeat, mirrorNativeControl } from './nativeControls'
+import { NativeComposerBridge, installSharedComposer, installBranchComposer } from './NativeComposer'
+import { controlSeat } from './nativeControls'
 import { NativeTurnBridge, installNativeTurns, nativeTurnSpec, turnSeat } from './NativeTurn'
 import { installNativeInteractions } from './NativeInteraction'
 import { installNativeWorkspace } from './NativeWorkspace'
@@ -75,8 +75,8 @@ export function apply(ctx) {
       id: 'dsh-study-tree.session',
       target: 'session',
       order: 250,
-      resolve: ({ sessionId }) => {
-        const node = study.nodes.find((item) => item.sessionId === sessionId)
+      resolve: ({ sessionId, studyNodeId }) => {
+        const node = study.nodes.find((item) => item.sessionId === sessionId && (!studyNodeId || item.id === studyNodeId))
         return [
           {
             id: 'open-study',
@@ -103,7 +103,7 @@ export function apply(ctx) {
     ),
   )
   ctx.effect(() => {
-    const stops = [mirrorNativeControl(ctx, 'conversation.composer.bar'), installNativeTurns(ctx), installNativeInteractions(ctx, study), installNativeWorkspace(ctx, study)]
+    const stops = [installSharedComposer(ctx, study), installBranchComposer(ctx), installNativeTurns(ctx), installNativeInteractions(ctx, study), installNativeWorkspace(ctx, study)]
     return () => stops.forEach(stop => stop())
   })
   ctx.slots.inject('conversation.hero.options', () =>

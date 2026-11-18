@@ -30,10 +30,10 @@ export function WorkspaceTree({
 }) {
   useStudy(study)
   const { getTriggerProps } = useContextMenu()
-  const node = study.nodes.find((item) => item.sessionId === sessionId)
+  const node = study.nodes.find((item) => !item.parentId && item.sessionId === sessionId)
   const [folds, setFolds] = useState(savedFolds)
   const rootRef = useRef<HTMLSpanElement>(null)
-  const elected = !!node && !node.parentId
+  const elected = !!node
   useLayoutEffect(() => {
     const row = rootRef.current?.closest<HTMLElement>('[data-row-key]')
     if (!elected || !row) return
@@ -100,7 +100,7 @@ export function WorkspaceTree({
             style={{ paddingLeft: 6 + depth * 15 }}
             {...getTriggerProps({
               kind: 'session',
-              value: { sessionId: turn.sessionId, displayTitle: turn.question },
+              value: { sessionId: turn.sessionId, displayTitle: turn.question, studyNodeId: turn.id },
             })}
           >
             <button
@@ -130,7 +130,7 @@ export function WorkspaceTree({
                 renderFactorySlot('contextMenu.button', {
                   target: {
                     kind: 'session',
-                    value: { sessionId: turn.sessionId, displayTitle: turn.question },
+                    value: { sessionId: turn.sessionId, displayTitle: turn.question, studyNodeId: turn.id },
                   },
                   label: '节点操作：' + turn.question,
                 })}

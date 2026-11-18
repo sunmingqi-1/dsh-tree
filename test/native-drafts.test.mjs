@@ -44,23 +44,48 @@ function fixture() {
     },
   }
   const drafts = new NativeDrafts(study)
-  const mount = (kind = 'card', anchor = null) => {
+  const mount = (kind = 'card', anchor = null, origin = parent) => {
     let reference
-    const request = { parent, kind, anchor }
+    const request = { parent: origin, kind, anchor }
     const stop = drafts.mount(request, ref => { reference = ref }, error => { throw Error(error) })
     return { stop, request, reference: () => reference, binding: () => bindings.get(reference.sessionId) }
   }
   return { study, drafts, parent, bindings, forks, opened, watched, mount, held: () => held }
 }
 
-test('卡片草稿从父轮结束处准备，重复挂载复用未发送的分支并释放引用', async () => {
+test('末尾普通追问复用原会话，连续两轮仍在同一 Session', async () => {
   const f = fixture(), first = f.mount(); await tick()
+  assert.deepEqual(f.forks, [])
+  assert.equal(first.reference().sessionId, 'source')
+  const source = first.binding()
+  source.add({ type: 'user/message', seq: 4, data: { source: { rpcId: 'second' }, content: [{ type: 'text', text: '第二轮' }] } })
+  await tick()
+  source.add({ type: 'turn/end', seq: 7 })
+  f.study.nodes[0].endSeq = 7
+  const reopened = f.mount(); await tick()
+  assert.equal(reopened.reference(), null, '原卡片不能把下次提交追加到子节点之后')
+  reopened.stop()
+  const second = f.mount('card', null, f.study.nodes[0]); await tick()
+  assert.equal(second.reference().sessionId, 'source')
+  source.add({ type: 'user/message', seq: 8, data: { source: { rpcId: 'third' }, content: [{ type: 'text', text: '第三轮' }] } })
+  await tick()
+  assert.deepEqual(f.study.nodes.map(node => node.sessionId), ['source', 'source'])
+  assert.equal(f.study.nodes[1].parentId, f.study.nodes[0].id)
+  assert.equal(f.forks.length, 0)
+  first.stop(); second.stop(); assert.equal(f.held(), 0)
+})
+
+test('旧卡片浏览不建会话，显式追问只继承到父轮结束位置', async () => {
+  const f = fixture()
+  f.bindings.get('source').add({ type: 'user/message', seq: 5, data: { source: { rpcId: 'later' } } })
+  const history = f.mount(); await tick()
+  assert.equal(history.reference(), null)
+  assert.deepEqual(f.forks, [])
+  history.stop()
+  const branch = f.mount('card-branch'); await tick()
   assert.deepEqual(f.forks, [{ sessionId: 'source', atSeq: 3 }])
-  first.stop(); assert.equal(f.held(), 0)
-  const second = f.mount(); await tick()
-  assert.equal(second.reference().sessionId, first.reference().sessionId)
-  assert.equal(f.forks.length, 1)
-  second.stop(); assert.equal(f.held(), 0)
+  assert.ok(branch.binding().eventSource.getSnapshot().entries.every(({ event }) => event.seq <= 3))
+  branch.stop(); assert.equal(f.held(), 0)
 })
 
 test('卡片和划词编辑器使用不同会话，不共享 Lexical root 或草稿', async () => {
@@ -70,7 +95,7 @@ test('卡片和划词编辑器使用不同会话，不共享 Lexical root 或草
   assert.notEqual(card.reference().sessionId, quote.reference().sessionId)
   assert.equal(card.binding().input.state.getSnapshot().draft, '卡片草稿')
   assert.match(quote.binding().input.state.getSnapshot().draft, /> 工具/)
-  card.stop(); quote.stop(); assert.equal(f.held(), 0)
+  card.stop(); quote.stop(); f.drafts.dispose(); assert.equal(f.held(), 0)
 })
 
 test('添加到对话复用卡片输入，保留草稿和附件，未发送时不创建节点', async () => {
@@ -79,7 +104,7 @@ test('添加到对话复用卡片输入，保留草稿和附件，未发送时�
   card.binding().input.addAttachments(['file-a'])
   const anchor = { text: '工具调用', start: 4, prefix: '', suffix: '' }
   await f.drafts.addToCard(f.parent, anchor)
-  assert.equal(f.forks.length, 1)
+  assert.equal(f.forks.length, 0)
   assert.equal(card.binding().input.state.getSnapshot().draft, '已有问题 > 工具调用 ')
   assert.deepEqual(card.binding().input.state.getSnapshot().attachmentIds, ['file-a'])
   assert.equal(f.study.nodes.length, 0)
@@ -90,18 +115,18 @@ test('添加到对话复用卡片输入，保留草稿和附件，未发送时�
   card.stop(); assert.equal(f.held(), 0)
 })
 
-test('预备划词输入后，反复更换选区不再创建或释放会话，也不刷新全局目录', async () => {
+test('打开分支才准备划词会话，随后复用未发送会话和独立选区草稿', async () => {
   const f = fixture(), card = f.mount()
   await tick()
-  const stopWarm = f.drafts.warmQuote(f.parent)
-  await tick()
-  const forks = f.forks.length, held = f.held()
-  let globalUpdates = 0
-  f.study.emit = () => { globalUpdates++ }
+  assert.equal(f.forks.length, 0)
   const a = { text: '模型', start: 0, prefix: '', suffix: '' }
   const b = { text: '工具', start: 8, prefix: '', suffix: '' }
   const first = f.mount('quote', a)
   await tick()
+  assert.equal(f.forks.length, 1)
+  const held = f.held()
+  let globalUpdates = 0
+  f.study.emit = () => { globalUpdates++ }
   const id = first.reference().sessionId
   first.binding().input.setDraft(quoteText(a.text) + '\n\n还没发送的问题')
   first.binding().input.addAttachments(['file-a'])
@@ -118,16 +143,15 @@ test('预备划词输入后，反复更换选区不再创建或释放会话，�
   assert.match(restored.binding().input.state.getSnapshot().draft, /还没发送的问题/)
   assert.deepEqual(restored.binding().input.state.getSnapshot().attachmentIds, ['file-a'])
   restored.stop()
-  assert.equal(f.forks.length, forks)
+  assert.equal(f.forks.length, 1)
   assert.equal(f.held(), held)
   assert.equal(globalUpdates, 0)
-  card.stop(); stopWarm()
+  card.stop(); f.drafts.dispose()
   assert.equal(f.held(), 0)
 })
 
 test('划词发送尚未接收时，新选区使用另一条草稿通道，后台接收不抢选择', async () => {
-  const f = fixture(), stopWarm = f.drafts.warmQuote(f.parent)
-  await tick()
+  const f = fixture()
   const first = f.mount('quote', { text: '模型', start: 0, prefix: '', suffix: '' })
   await tick()
   const original = first.binding()
@@ -142,7 +166,7 @@ test('划词发送尚未接收时，新选区使用另一条草稿通道，后�
   assert.equal(f.study.nodes[0].anchor.text, '模型')
   assert.deepEqual(f.opened, [])
   assert.match(second.binding().input.state.getSnapshot().draft, /> 工具/)
-  second.stop(); stopWarm()
+  second.stop(); f.drafts.dispose()
   assert.equal(f.held(), 0)
 })
 
@@ -176,7 +200,7 @@ test('节点写入失败后刷新只恢复记录，不重复发送或创建新�
   assert.equal(Object.keys(pending).length, 1)
   f.study.failSave = false; await f.drafts.recover(); await f.drafts.recover()
   assert.equal(f.study.nodes.length, 1); assert.equal(f.study.nodes[0].id, Object.keys(pending)[0])
-  assert.equal(f.forks.length, 1)
+  assert.equal(f.forks.length, 0)
 })
 
 test('旧版卡片草稿只迁移一次，删除原生引用时不保留失效的引用关系', async () => {
