@@ -38,6 +38,13 @@ export class Study {
   turnNumbers = new Map<string, number>()
   nodes: Turn[] = []
   answers = new Map<string, string>()
+  private turnAnswers = new Map<string, Map<number, string>>()
+  answerFor(node: Turn) {
+    const parts = this.turnAnswers.get(node.id)
+    return parts && node.activeTurns
+      ? node.activeTurns.map(turn => parts.get(turn)).filter(Boolean).join('\n\n')
+      : this.answers.get(node.id)
+  }
   issues = new Map<string, string>()
   listeners = new Set<() => void>()
   watches = new Map<string, () => void>()
@@ -142,6 +149,8 @@ export class Study {
         const merged = new Map(this.nodes.map(row => [row.id, row]))
         for (const row of changes.values()) {
           const old = merged.get(row.id)
+          if (row.continuations?.length && (old?.endSeq !== row.endSeq || old?.activeTurns?.at(-1) !== row.activeTurns?.at(-1)))
+            this.answers.delete(row.id)
           merged.set(row.id, { ...old, ...row, revision: old?.revision || 0 })
           this.turnNumbers.set(row.id, row.turn)
         }
@@ -348,8 +357,20 @@ export class Study {
               break
             }
           }
-          const result = readTurn(entries, n.requestId, n.startSeq)
-          if (n.endSeq !== null && result.endSeq === null) {
+          const current = this.nodes.find(node => node.id === n.id) || n
+          const primary = readTurn(entries, n.requestId, n.startSeq)
+          let result = primary
+          if (current.continuations?.length) {
+            const parts = new Map([[current.turn, primary.answer]])
+            for (const part of current.continuations) {
+              const tail = readTurn(entries, undefined, part.startSeq)
+              parts.set(part.turn, tail.answer)
+              if (part.turn === current.activeTurns?.at(-1)) result = tail
+            }
+            this.turnAnswers.set(n.id, parts)
+            result = { ...result, answer: this.answerFor(current) || '' }
+          }
+          if (current.endSeq !== null && result.endSeq === null) {
             fail(new Error('未能读取此节点的完整问答，请刷新后重试'))
             return
           }

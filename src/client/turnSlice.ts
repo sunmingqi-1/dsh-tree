@@ -27,11 +27,10 @@ export function turnNumber(snapshot, requestId: string): number | undefined {
   }
 }
 
-export function turnKeys(snapshot, requestId: string, reader = false): string {
+export function turnKeys(snapshot, requestId: string, reader = false, visibleTurns?: number[]): string {
   const turn = turnNumber(snapshot, requestId)
-  if (turn === undefined) return ''
-  return snapshot.locations
-    .getTurn(turn)
+  const numbers = visibleTurns ?? (turn === undefined ? [] : [turn])
+  return numbers.flatMap(number => snapshot.locations.getTurn(number))
     .filter((key) => {
       const node = snapshot.nodes.get(key)
       return (
@@ -60,7 +59,7 @@ export function interactionOwner(pending, nodes, bindings, turns) {
     turn = bindings.get(pending.sessionId)?.openTurn.getSnapshot()
   }
   if (turn === undefined) return undefined
-  return candidates.find((n) => (turns.get(n.id) ?? turnNumber(snapshot, n.requestId)) === turn)?.id
+  return candidates.find((n) => n.continuations?.some(part => part.turn === turn) || (turns.get(n.id) ?? turnNumber(snapshot, n.requestId)) === turn)?.id
 }
 
 export function processVisibility(node, presentation, expanded: boolean) {

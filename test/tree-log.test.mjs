@@ -94,3 +94,24 @@ test('宿主后台轮的独立压缩不能改写可见父卡片的边界', () =>
   extra('compaction/end', { turn: null, compactionId: 'hidden' })
   assert.equal(log.nodes.get(d).boundarySeq, original)
 })
+import { pathTo, readTurn } from '../src/client/tree.ts'
+
+test('带明确父边界的宿主续轮归原卡，历史子节点保持当时继承的原生轮次', () => {
+  const { events, endB } = scenario()
+  const log = new TreeLog('session')
+  for (const e of events) log.append(e)
+  const add = (type, data) => { const e = { type, data, seq: events.length, time: 1000 }; events.push(e); log.append(e); return e.seq }
+  const follow = add('turn/start', { turn: 5, parentSeq: endB })
+  add('user/message', { source: { kind: 'user-question-reply', callId: 'question' }, content: [] })
+  add('assistant/message', { turn: 5, step: 0, message: { content: [{ type: 'text', text: '继续回答 B' }] } })
+  const continuedEnd = add('turn/end', { turn: 5, reason: { kind: 'completed' } })
+  assert.equal(log.nodes.size, 4)
+  assert.equal(log.nodes.get(b).boundarySeq, continuedEnd)
+  assert.deepEqual(log.nodes.get(b).activeTurns, [2, 5])
+  assert.deepEqual(pathTo([...log.nodes.values()], d)[1].activeTurns, [2])
+  const e = crypto.randomUUID()
+  add('turn/start', { turn: 6, parentSeq: continuedEnd, requestId: 'next', metadata: { studyTree: { id: e } } })
+  add('user/message', { source: { kind: 'user', rpcId: 'next' }, content: [{ type: 'text', text: 'E' }] })
+  assert.deepEqual(pathTo([...log.nodes.values()], e)[1].activeTurns, [2, 5])
+  assert.equal(readTurn(events.map(event => ({ event })), undefined, follow).answer, '继续回答 B')
+})

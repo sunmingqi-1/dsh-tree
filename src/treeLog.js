@@ -27,6 +27,16 @@ export class TreeLog {
       this.current = null
       const admitted = this.queued.find(item => data.requestId && item.source?.rpcId === data.requestId)
       if (admitted) return this.addQuestion(admitted)
+      const parent = this.boundaries.get(data.parentSeq)
+      if (!data.requestId && parent && typeof data.parentSeq === 'number') {
+        const latest = this.nodes.get(parent.id)
+        const next = { turn: data.turn, startSeq: seq }
+        this.current = { ...latest, status: 'sending', error: null, endSeq: null,
+          activeTurns: [...(parent.activeTurns || [parent.turn]), next.turn],
+          continuations: [...(latest.continuations || []), next] }
+        this.nodes.set(parent.id, this.current)
+        return this.current
+      }
     } else if (type === 'user/message' && this.opening && !this.current) {
       return this.addQuestion(data)
     } else if (type === 'compaction/start' && data.turn === null && !this.opening) {
@@ -81,6 +91,7 @@ export class TreeLog {
       id, treeId: this.rootId, parentId: parent?.id || null, question, anchor,
       created: this.opening.time, sessionId: this.sessionId, requestId: source.rpcId,
       endSeq: null, boundarySeq: null, status: 'sending', error: null, revision: 0,
+      ...(parent && { parentTurns: parent.activeTurns || [parent.turn] }),
       turn: start.turn, startSeq: this.opening.seq, logged: true,
       ...(typeof meta.versionOf === 'string' && { versionOf: meta.versionOf }),
     }

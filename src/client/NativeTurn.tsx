@@ -39,7 +39,7 @@ export function NativeTurnSeat({ study, node, children, reader = false }) {
       study.turns.seats.delete(element)
       study.turns.emit()
     }
-  }, [study, node.id, node.sessionId, node.requestId])
+  }, [study, node.id, node.sessionId, node.requestId, node.activeTurns?.join(',')])
   return (
     <div ref={ref} className="st-native-turn" data-answer={reader ? undefined : node.id}>
       {!ready && children}
@@ -230,7 +230,7 @@ function NativeTurnView(props) {
     fileDrag,
     t,
   } = props
-  const signature = useChat((snapshot) => turnKeys(snapshot, studyNode.requestId, reader))
+  const signature = useChat((snapshot) => turnKeys(snapshot, studyNode.requestId, reader, studyNode.activeTurns ?? (studyNode.logged ? [studyNode.turn] : undefined)))
   const [expanded, updateExpanded] = useState(() => {
     try {
       return localStorage.getItem('dsh-study-tree:process:' + studyNode.id) !== 'false'

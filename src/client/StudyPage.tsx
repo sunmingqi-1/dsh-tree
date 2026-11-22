@@ -662,7 +662,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
               '\n\n'
             : '') +
           (n.anchor ? '> ' + n.anchor.text.replaceAll('\n', '\n> ') + '\n\n' : '') +
-          (study.answers.get(n.id) || n.error || states[n.status]),
+          (study.answerFor(n) || n.error || states[n.status]),
       )
       .join('\n\n---\n\n')
     const url = URL.createObjectURL(new Blob([md], { type: 'text/markdown;charset=utf-8' }))
