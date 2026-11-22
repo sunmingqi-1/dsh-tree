@@ -2,6 +2,8 @@ import React, { useEffect, useLayoutEffect, useState, useSyncExternalStore } fro
 import { createPortal } from 'react-dom'
 import { useStudy } from './WorkspaceTree'
 import { StudyPage } from './StudyPage'
+import { NativeTurnSeat } from './NativeTurn'
+import { pathTo } from './tree'
 
 // Keep the real Conversation mounted in its own slot. Add only the canvas beside it.
 export function NativeFrame({ study, useSessions, usePanelInfo }) {
@@ -22,6 +24,11 @@ export function NativeFrame({ study, useSessions, usePanelInfo }) {
     return () => observer.disconnect()
   }, [])
   useEffect(() => {
+    if (study.creating && study.pendingSession && selectedSession && study.pendingSession !== selectedSession.id) {
+      study.pendingStop()
+      study.creating = false
+      study.emit()
+    }
     if (study.creating && selectedSession?.blank && study.pendingSession !== selectedSession.id)
       study.armRoot(selectedSession.id)
     if (!study.enabled || !selectedSession) return
@@ -80,27 +87,6 @@ export function NativeBoundary({
     )
     if (!native) return
     native.classList.add('st-native-reader')
-    const ids = new Map(path.map((node) => [String(study.turnNumbers.get(node.id)), node.id]))
-    const allowed = [...ids.keys()]
-      .filter((turn) => turn !== 'undefined')
-      .map((turn) => '[data-chat-turn="' + turn + '"]')
-      .join(',')
-    const style = document.createElement('style')
-    style.textContent = allowed
-      ? '.st-native-reader [data-chat-turn]:not(' + allowed + '){display:none!important}'
-      : '.st-native-reader [data-chat-turn]{visibility:hidden}'
-    native.appendChild(style)
-    const annotate = () => {
-      for (const element of native.querySelectorAll<HTMLElement>(
-        '[data-chat-flow-kind="assistant-step"][data-chat-turn] [data-text-interaction-source]',
-      )) {
-        const turn = element.closest<HTMLElement>('[data-chat-turn]')?.dataset.chatTurn
-        if (ids.has(turn)) element.dataset.answer = ids.get(turn)
-      }
-    }
-    annotate()
-    const observer = new MutationObserver(annotate)
-    observer.observe(native, { childList: true, subtree: true })
     const context = (event) => {
       if (!(event.target instanceof Element) || !event.target.closest('[data-answer]')) return
       if (!getSelection()?.toString()) return
@@ -127,12 +113,36 @@ export function NativeBoundary({
     })
     return () => {
       cancelAnimationFrame(timer)
-      observer.disconnect()
       native.removeEventListener('contextmenu', context, true)
       native.removeEventListener('scroll', scroll, true)
       native.classList.remove('st-native-reader')
-      style.remove()
     }
   }, [frame, signature, sessionKey])
   return null
+}
+
+// Use the resident native scrollport and one keyed native message renderer per
+// path Turn. Sibling Turns never enter the reader, navigation or scroll policy.
+export function installPathReader(ctx, study) {
+  return ctx.slots.inject('conversation.session', () => {
+    function PathReader() {
+      useStudy(study)
+      return <div className="st-path-reader">
+        {pathTo(study.nodes, study.active).map(node => (
+          <NativeTurnSeat key={node.id} study={study} node={node} reader>
+            <p>{node.question}</p>
+          </NativeTurnSeat>
+        ))}
+      </div>
+    }
+    let stop: (() => void) | undefined
+    const sync = () => {
+      if (study.enabled && !stop)
+        stop = ctx.slots.register({ name: 'conversation.session', id: 'dsh-study-tree.path', priority: -100 }, PathReader)
+      else if (!study.enabled && stop) { stop(); stop = undefined }
+    }
+    study.listeners.add(sync)
+    sync()
+    return () => { study.listeners.delete(sync); stop?.() }
+  })
 }

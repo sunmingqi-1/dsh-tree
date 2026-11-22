@@ -9,6 +9,10 @@ export function isUserPrompt(event) {
   return event.type === 'user/message' && !!source?.rpcId && (!source.kind || source.kind === 'user')
 }
 export interface Turn {
+  logged?: boolean
+  turn?: number
+  startSeq?: number
+  boundarySeq?: number | null
   title?: string
   versionOf?: string
   id: string
@@ -38,7 +42,7 @@ export function pathTo(nodes: Turn[], id: string | null): Turn[] {
   return path
 }
 
-export function readTurn(entries, requestId: string) {
+export function readTurn(entries, requestId: string, startSeq?: number) {
   let startTurn = null
   let matched = false
   let endSeq = null
@@ -57,12 +61,23 @@ export function readTurn(entries, requestId: string) {
     }
     return state
   }
-  for (const { event } of entries) {
+  let low = 0
+  if (startSeq !== undefined) {
+    let high = entries.length
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2)
+      if (entries[mid].event.seq < startSeq) low = mid + 1
+      else high = mid
+    }
+  }
+  for (let i = low; i < entries.length; i++) {
+    const { event } = entries[i]
     const { type, data } = event
     if (type === 'turn/start') {
       // Once the request is located, its boundary never moves to a later turn.
       if (matched) break
       startTurn = data.turn
+      if (event.seq === startSeq && data.requestId === requestId) matched = true
       currentStep = 0
     }
     if (type === 'user/message' && data.source?.rpcId === requestId) matched = true

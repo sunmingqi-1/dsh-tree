@@ -1146,3 +1146,6 @@ div:has(> div > [data-slot='conversation.hero.options'] > .st-native-start) {
 @container (max-width: 360px) {
   .st-canvas-tools .st-edge-trigger span, .st .st-canvas-tools .st-tool-divider { display: none; }
 }
+
+.st-path-reader { padding: 16px clamp(12px, 3%, 32px); max-width: 900px; margin: 0 auto; }
+.st-path-reader .st-native-turn + .st-native-turn { margin-top: 24px; }

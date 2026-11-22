@@ -27,7 +27,7 @@ export function turnNumber(snapshot, requestId: string): number | undefined {
   }
 }
 
-export function turnKeys(snapshot, requestId: string): string {
+export function turnKeys(snapshot, requestId: string, reader = false): string {
   const turn = turnNumber(snapshot, requestId)
   if (turn === undefined) return ''
   return snapshot.locations
@@ -36,7 +36,7 @@ export function turnKeys(snapshot, requestId: string): string {
       const node = snapshot.nodes.get(key)
       return (
         node &&
-        !['user', 'steering', 'context', 'system-prompt', 'inherited-history'].includes(node.kind)
+        (reader || !['user', 'steering', 'context', 'system-prompt', 'inherited-history'].includes(node.kind))
       )
     })
     .join('\u001f')

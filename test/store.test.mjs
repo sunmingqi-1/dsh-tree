@@ -6,6 +6,7 @@ test('并发旧版本写入被拒绝，兄弟节点可以独立保存', async ()
   const rows = new Map(),
     services = new Map()
   await apply({
+    sessionPersistence: { list: async () => [] },
     storageDomain: {
       open: async () => ({
         table: () => ({
@@ -43,6 +44,6 @@ test('并发旧版本写入被拒绝，兄弟节点可以独立保存', async ()
   assert.equal(b.status, 'rejected')
   const child = () => ({ ...root, id: crypto.randomUUID(), parentId: root.id, revision: 0 })
   await Promise.all([store.save(child()), store.save(child())])
-  assert.equal(store.list().length, 3)
+  assert.equal((await store.list()).length, 3)
   await assert.rejects(store.save({ ...child(), treeId: crypto.randomUUID() }))
 })

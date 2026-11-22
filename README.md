@@ -61,6 +61,8 @@ flowchart TB
 
 开发版的覆盖范围见该分支的[原生单轮卡片验证](https://github.com/sunmingqi-1/dsh-tree/blob/feat/native-turn-cards/docs/原生单轮卡片验证.md)。开发版功能不会自动进入稳定分支。
 
+本分支的单会话学习树需要配套的 DSH `feat/single-session-tree` 宿主和客户端。每棵新树使用一个会话，卡片和划词追问会沿选中的父轮次继续。旧版 fork 树可以回看。重新回答或改写根问题会建立新主题。
+
 ## 安装
 
 先安装并运行 DeepSeek Harness，再在本地构建本插件：

@@ -323,7 +323,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     setPrefs((p) => ({ ...p, [name]: { ...p[name], [id]: value } }))
   const select = (n) => {
     if (study.active !== n.id) {
-      study.active = n.id
+      study.setActive(n.id)
       study.emit()
     }
     setPrefs((p) => ({ ...p, tree: n.treeId, selected: { ...p.selected, [n.treeId]: n.id } }))
@@ -348,7 +348,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
   }, [study.navigation])
   useEffect(() => {
     if (study.active !== active) {
-      study.active = active
+      study.setActive(active)
       study.emit()
     }
   }, [active])
@@ -535,11 +535,6 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
         parent,
         prompt,
         anchor,
-        (n) => {
-          pendingFocus.current = n.id
-          select(n)
-          setSelection(null)
-        },
         versionOf,
       )
       if (!anchor && !versionOf) saveDraft(parent?.id || 'root', '')
@@ -760,7 +755,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
                       setEditing({ kind: 'question', id: active, text: byId.get(active)?.question })
                     }
                   >
-                    改写问题
+                    {byId.get(active)?.parentId ? '改写问题' : '在新主题中改写根问题'}
                   </button>
                   <button
                     disabled={busy}
@@ -769,7 +764,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
                       void submit(byId.get(n.parentId), n.question, n.anchor, n.id)
                     }}
                   >
-                    重新回答
+                    {byId.get(active)?.parentId ? '重新回答' : '在新主题中重新回答'}
                   </button>
                 </section>
               </details>

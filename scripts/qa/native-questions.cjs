@@ -42,7 +42,7 @@ const fs = require('node:fs'),
     const handle = await panel.elementHandle()
     await panel.getByText('整体架构', { exact: true }).click()
     await p.locator('.st-tree-title').filter({ hasText: root }).click()
-    await p.getByRole('button', { name: '从此处分支追问' }).waitFor()
+    await input.waitFor()
     assert.equal(await p.locator('[data-question-key]:visible').count(), 0)
     await p.locator('.st-tree-title').filter({ hasText: followup }).click()
     await panel.waitFor()
