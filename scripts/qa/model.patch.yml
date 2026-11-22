@@ -15,3 +15,6 @@
   config:
     provider: study-test
     model: mock
+- id: workspace-controller
+  config:
+    documentsDirectory: !!js process.env.DSH_QA_DOCUMENTS
