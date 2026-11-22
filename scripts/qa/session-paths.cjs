@@ -84,6 +84,12 @@ async function waitForLog(sessionId, questions) {
       assert.deepEqual(sessionLogs(), before, '卡片续问时不应增加 Session 日志')
     }
 
+    const pick = async (text) => {
+      await page.locator('.st-tree-title').filter({ hasText: text }).click()
+      await waitTitle(text)
+      await editor(card).waitFor()
+    }
+    await pick(messages[0])
     await editor(card).fill(messages[2])
     await page.getByRole('button', { name: '在右侧输入', exact: true }).click()
     const rightInput = editor(conversation)
@@ -99,14 +105,13 @@ async function waitForLog(sessionId, questions) {
       assert.deepEqual(sessionLogs(), before, '右侧续问时不应增加 Session 日志')
     }
 
-    await page.locator('.st-tree-title').filter({ hasText: messages[0] }).click()
-    await waitTitle(messages[0])
-    await editor(card).waitFor()
+    await pick(messages[1])
     assert.equal(await currentSession(), rootSession)
     assert.deepEqual(await draftForks(), [])
     const shown = await page.locator(`${conversation} [data-chat-turn]:visible`).allTextContents()
     assert.ok(shown.some(text => text.includes(messages[0])))
-    assert.ok(shown.every(text => !text.includes(messages[1]) && !text.includes(messages[2])))
+    assert.ok(shown.some(text => text.includes(messages[1])))
+    assert.ok(shown.every(text => !text.includes(messages[2])))
     await send(editor(card), messages[3])
     await editor(card).waitFor()
     const branchSession = await currentSession()
@@ -119,15 +124,16 @@ async function waitForLog(sessionId, questions) {
     const branchRows = await page.locator(`${conversation} [data-chat-turn]:visible`).allTextContents()
     assert.ok(branchRows.some(text => text.includes(messages[0])))
     assert.ok(branchRows.some(text => text.includes(messages[3])))
-    assert.ok(branchRows.every(text => !text.includes(messages[1]) && !text.includes(messages[2])))
+    assert.ok(branchRows.some(text => text.includes(messages[1])))
+    assert.ok(branchRows.every(text => !text.includes(messages[2])))
     const requests = fs.readFileSync(path.join(process.env.DSH_QA_OUTPUT || path.join(process.env.TEMP, 'dsh-study-tree-qa'), 'native-requests.jsonl'), 'utf8').split('\n')
     const continuation = requests.findLast(line => line.includes(messages[2]))
     const branch = requests.findLast(line => line.includes(messages[3]))
-    assert.ok(continuation.includes(messages[0]) && continuation.includes(messages[1]))
-    assert.ok(branch.includes(messages[0]) && !branch.includes(messages[1]) && !branch.includes(messages[2]))
+    assert.ok(continuation.includes(messages[0]) && !continuation.includes(messages[1]))
+    assert.ok(branch.includes(messages[0]) && branch.includes(messages[1]) && !branch.includes(messages[2]))
     assert.equal(await activeTitle.textContent(), messages[3])
     assert.deepEqual(errors, [])
-    console.log('普通续问和右栏续问复用一个会话，回看历史零 fork，旧节点分支的模型请求排除了后续两轮')
+    console.log('A→B、A→C、B→D 共享同一日志；C 和 D 的原生阅读与模型输入只包含各自的父链。')
   } finally {
     await browser.close()
   }
