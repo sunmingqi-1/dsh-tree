@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="940" viewBox="0 0 1440 940" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="80" y1="0" x2="1360" y2="940" gradientUnits="userSpaceOnUse"><stop stop-color="#101820"/><stop offset=".48" stop-color="#111219"/><stop offset="1" stop-color="#171526"/></linearGradient>
+    <radialGradient id="glow"><stop stop-color="#6586D5" stop-opacity=".2"/><stop offset="1" stop-color="#6586D5" stop-opacity="0"/></radialGradient>
+    <linearGradient id="line" x1="540" y1="540" x2="1090" y2="780" gradientUnits="userSpaceOnUse"><stop stop-color="#93BBFF"/><stop offset="1" stop-color="#AC94ED"/></linearGradient>
+    <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="12" cy="12" r="1" fill="#66748E" opacity=".23"/></pattern>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dy="18" stdDeviation="28" flood-color="#000" flood-opacity=".32"/></filter>
+    <style>text{font-family:Inter,"Segoe UI","Microsoft YaHei",sans-serif}.muted{fill:#8994A7}.body{fill:#CBD1DF}.white{fill:#F2F5FC}.small{font-size:13px}.label{font-size:15px}.bold{font-weight:650}</style>
+  </defs>
+  <rect width="1440" height="940" rx="28" fill="url(#bg)"/>
+  <ellipse cx="730" cy="400" rx="740" ry="470" fill="url(#glow)"/>
+  <g transform="translate(70 58)">
+    <path d="M0 14v32m0-18c30 0 12-28 40-28M0 42c30 0 12 22 40 22" stroke="#96B7FF" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="0" cy="14" r="6" fill="#96B7FF"/><circle cx="40" cy="0" r="6" fill="#B2A1EE"/><circle cx="40" cy="64" r="6" fill="#6AC3B0"/>
+    <text x="68" y="42" font-size="48" class="white bold" letter-spacing="-2">dsh-tree</text>
+    <rect x="307" y="11" width="216" height="30" rx="15" fill="#253247"/><text x="325" y="31" fill="#B8CFFF" font-size="12" letter-spacing="1.8">A DSH LEARNING PLUGIN</text>
+  </g>
+  <text x="70" y="210" font-size="58" class="white bold" letter-spacing="-1">让知识沿着问题生长。</text>
+  <text x="73" y="253" font-size="21" class="body">从一问一答，到一棵可以探索、回溯、继续生长的学习树。</text>
+  <g transform="translate(73 283)" class="small">
+    <rect width="111" height="31" rx="15.5" fill="#253247"/><text x="17" y="21" fill="#BDCEEF">单会话 · 多路径</text>
+    <rect x="123" width="105" height="31" rx="15.5" fill="#202F30"/><text x="141" y="21" fill="#9DD9C7">原生 Agent UI</text>
+    <rect x="240" width="104" height="31" rx="15.5" fill="#2A263C"/><text x="261" y="21" fill="#C6B8F4">划词开分支</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="58" y="356" width="1324" height="514" rx="16" fill="#141519" stroke="#3B414F"/>
+    <path d="M74 356h1292a16 16 0 0 1 16 16v29H58v-29a16 16 0 0 1 16-16Z" fill="#1C1F26"/>
+    <circle cx="82" cy="379" r="4" fill="#647085"/><circle cx="98" cy="379" r="4" fill="#647085"/><circle cx="114" cy="379" r="4" fill="#647085"/>
+    <text x="145" y="385" class="body small">DSH / 学习画布</text><text x="1205" y="385" class="muted small">概念界面示意</text>
+    <path d="M254 401v469M1094 401v469" stroke="#2C3039"/>
+    <rect x="255" y="402" width="838" height="467" fill="url(#dots)"/>
+    <text x="80" y="439" class="body label bold">工作区</text><text x="80" y="475" class="muted small">⌄  我的学习</text>
+    <rect x="71" y="491" width="170" height="34" rx="8" fill="#293348"/><circle cx="89" cy="508" r="3" fill="#8EB6FF"/><text x="103" y="513" fill="#D2E0FB" class="small">学习 DSH 架构</text>
+    <path d="M89 536v81m0-70h15m-15 34h15m-15 34h15" stroke="#465067"/>
+    <text x="111" y="551" class="body small">工具如何工作？</text><text x="111" y="585" class="muted small">JSON Schema</text><text x="111" y="619" class="muted small">上下文管理</text>
+    <text x="80" y="824" class="muted small">在原生目录中组织分支</text>
+    <path d="M669 608v25Q669 652 650 652H452Q433 652 433 671v21M806 505h84Q910 505 910 529v164" stroke="url(#line)" stroke-width="2.5"/>
+    <rect x="477" y="432" width="330" height="177" rx="12" fill="#15171B" stroke="#779EDF" stroke-width="1.5"/>
+    <rect x="488" y="443" width="308" height="34" rx="8" fill="#2B303A"/><text x="502" y="465" class="white label bold">DSH 是如何运行的？</text>
+    <text x="495" y="506" fill="#A4B8D9" class="small">✧ 已完成分析 · 已读取源码</text>
+    <text x="495" y="537" class="body label">先理解 Agent、工具与上下文，</text><text x="495" y="562" class="body label">再沿着你感兴趣的问题深入。</text>
+    <rect x="495" y="578" width="290" height="20" rx="10" fill="#2B2D34"/><text x="507" y="592" class="muted" font-size="10">从这里继续提问…</text>
+    <circle cx="669" cy="609" r="3.5" fill="#9CBDFF"/><circle cx="807" cy="505" r="3.5" fill="#B6A6E6"/>
+    <rect x="285" y="693" width="298" height="122" rx="12" fill="#15191C" stroke="#4B796F"/>
+    <rect x="296" y="704" width="276" height="31" rx="7" fill="#253832"/><text x="310" y="725" fill="#C1E8D8" class="small bold">↓  继续主线：工具如何工作？</text>
+    <text x="303" y="763" class="body small">模型提出调用，宿主执行并返回结果。</text><text x="303" y="790" class="muted small">流式回复 / 工具过程 / 原生交互</text>
+    <rect x="748" y="693" width="303" height="122" rx="12" fill="#19171E" stroke="#78658F"/>
+    <rect x="759" y="704" width="281" height="31" rx="7" fill="#302B3D"/><text x="773" y="725" fill="#DFD3F5" class="small bold">↳  划词分支：什么是上下文？</text>
+    <text x="766" y="762" fill="#B8A5D6" class="small">↖ 引用自「Agent、工具与上下文」</text><text x="766" y="790" class="body small">解释陌生概念，读懂后再返回。</text>
+    <text x="1115" y="438" class="white label bold">原生对话 · 当前路径</text><text x="1115" y="466" class="muted small">根节点 → 工具如何工作？</text>
+    <path d="M1115 484h246" stroke="#30343E"/>
+    <rect x="1166" y="505" width="193" height="43" rx="12" fill="#2C2E35"/><text x="1180" y="532" class="body small">DSH 是如何运行的？</text>
+    <text x="1116" y="580" class="white label bold">从整体理解运行循环</text><text x="1116" y="610" class="body small">接收问题，组织上下文，</text><text x="1116" y="635" class="body small">调用模型，再处理工具结果。</text>
+    <rect x="1175" y="674" width="184" height="41" rx="12" fill="#2C2E35"/><text x="1190" y="700" class="body small">工具如何工作？</text>
+    <text x="1116" y="751" fill="#9BB9DD" class="small">✧ 正在读取相关文件…</text><text x="1116" y="784" class="body small">原始过程与回答沿路径呈现。</text>
+  </g>
+  <text x="72" y="909" fill="#7B879B" font-size="12" letter-spacing="2">ASK. BRANCH. UNDERSTAND. RETURN.</text><text x="1157" y="909" fill="#7B879B" font-size="12">OPEN SOURCE / MIT</text>
+</svg>
