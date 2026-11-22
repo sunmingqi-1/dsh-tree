@@ -24,7 +24,9 @@ export function NativeFrame({ study, useSessions, usePanelInfo }) {
     return () => observer.disconnect()
   }, [])
   useEffect(() => {
-    if (study.creating && study.pendingSession && selectedSession && study.pendingSession !== selectedSession.id) {
+    // The native new-session action can replace one blank hero with another
+    // while the first input is still arming. Carry the learning choice along.
+    if (study.creating && study.pendingSession && selectedSession && !selectedSession.blank && study.pendingSession !== selectedSession.id) {
       study.pendingStop()
       study.creating = false
       study.emit()

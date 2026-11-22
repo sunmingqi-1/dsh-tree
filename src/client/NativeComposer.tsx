@@ -22,7 +22,8 @@ export function installSharedComposer(ctx, study) {
         return () => { drafts.home = null; drafts.emit() }
       }, [canvas, drafts])
       if (!canvas) {
-        const blocked = study.creating && study.pendingSession === sessionId && !study.rootReady
+        const blocked = study.creating && (props.variant === 'hero' || study.pendingSession === sessionId)
+          && (!study.rootReady || study.pendingSession !== sessionId)
         return <>{blocked && study.error && <div role="alert">{study.error}</div>}
           {renderSlot(sharedSeat(composerBar), { ...props, disabled: props.disabled || blocked })}</>
       }
