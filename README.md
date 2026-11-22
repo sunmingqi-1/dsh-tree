@@ -57,7 +57,7 @@ flowchart TB
 | **`main`** | 稳定版本 | 0.6.4，本文安装步骤默认使用此分支。 |
 | `feat/native-turn-cards` | 开发版本 | 0.7 系列，新增原生流式过程、过程折叠与卡片内提问/审批。 |
 
-当前针对 **DSH `0.2.2-rc.3`** 适配，构建使用 **Node.js 24**。其他 DSH 版本尚未承诺兼容；复用的宿主 UI 接口可能随 DSH 升级而变化。
+插件 `0.8.1` 适配 **DSH `0.2.2-rc.5`**，构建使用 **Node.js 24**。插件 `0.8.0` 对应 DSH `0.2.2-rc.3`。
 
 开发版的覆盖范围见该分支的[原生单轮卡片验证](https://github.com/sunmingqi-1/dsh-tree/blob/feat/native-turn-cards/docs/原生单轮卡片验证.md)。开发版功能不会自动进入稳定分支。
 
