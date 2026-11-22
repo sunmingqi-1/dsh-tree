@@ -1,0 +1,297 @@
+--- a/src/agent.ts
++++ b/src/agent.ts
+@@ -1,3 +1,4 @@
++import { routeTreeInput } from 'dsh-study-tree/branch-routing'
+ /**
+  * Default Agent driver over queued turns and step-boundary input. Every request
+  * is derived from the session log.
+@@ -14,12 +15,13 @@
+   ModelSelection,
+   ModelSelectionProjectionState,
+   InboxTarget,
++  InboxMessage,
+   InboxState,
+   PreStepDecision,
+   RequestErrorAction,
+ } from '@deepseek-ai/dsh-agent'
+ import { AgentModel, agentEvents, assembleContextFor } from '@deepseek-ai/dsh-agent'
+-import type { GenerateOptions, LlmCallConfig, Message, PreparedLlmCall } from '@deepseek-ai/dsh-llm'
++import type { GenerateOptions, LlmCallConfig, Message, MessageId, PreparedLlmCall } from '@deepseek-ai/dsh-llm'
+ import {
+   LlmError,
+   createAssistantMessage,
+@@ -168,24 +170,34 @@
+     }
+   }
+ 
+-  send(message: UserMessage, target: InboxTarget, wakeup: boolean): void {
++  send(input: InboxMessage, target: InboxTarget, wakeup: boolean): void {
++    const message = routeTreeInput(this.session, input)
+     // Waking input cannot join an aborted activity, so it starts the next turn.
+     // Captured before the insertion so a reentrant cancel from a splice observer cannot reclassify it.
+     const wakingAfterAbort = wakeup && this.phase.kind !== 'idle' && this.phase.abort.signal.aborted
+-    const resolvedTarget = wakingAfterAbort ? 'next-turn' : target
++    let resolvedTarget = wakingAfterAbort ? 'next-turn' : target
++    const origin = message.turnParent?.continuationOf
++    if (message.turnParent !== undefined && origin === undefined) resolvedTarget = 'next-turn'
++    if (origin !== undefined && resolvedTarget === 'next-step') {
++      const boundary = this.loopCtx.agents.turnBoundaryOf(this.session)
++      if (this.phase.kind !== 'running' || this.phase.abort.signal.aborted
++        || boundary.openTurnStartSeq === null || boundary.lastTurn !== origin) {
++        resolvedTarget = 'next-turn'
++      }
++    }
+     this.inbox.splice(resolvedTarget, Infinity, 0, [message])
+     if (wakeup) this.wakeDriver(wakingAfterAbort)
+   }
+ 
+-  followup(input: UserMessage): void {
++  followup(input: InboxMessage): void {
+     this.send(input, 'next-turn', true)
+   }
+ 
+-  steer(input: UserMessage): void {
++  steer(input: InboxMessage): void {
+     this.send(input, 'next-step', true)
+   }
+ 
+-  inject(input: UserMessage): void {
++  inject(input: InboxMessage): void {
+     this.send(input, 'next-step', false)
+   }
+ 
+@@ -286,11 +298,11 @@
+     }
+   }
+ 
+-  private async preStep(target: InboxTarget, position: { turn: number; step: number }): Promise<PreparedStep> {
++  private async preStep(position: { turn: number; step: number }, queuedId?: MessageId): Promise<PreparedStep> {
+     /* v8 ignore next -- private callers establish the running phase before proposing a step */
+     if (this.phase.kind !== 'running') throw new Error(`agent "${this.id}": pre-step outside running phase`)
+     const signal = this.phase.abort.signal
+-    const claimed = this.inbox.claim(target, position.turn)
++    const claimed = this.inbox.claim(position.turn, queuedId)
+     const selection = this.model.current()
+     if (selection === undefined) {
+       throw new Error(`agent "${this.id}" has no provider/model: set AgentOptions.provider and AgentOptions.model or record a model selection`)
+@@ -338,19 +350,26 @@
+     const { signal } = phase.abort
+     signal.throwIfAborted()
+     const turn = phase.turn + 1
++    const queued = this.inbox.nextTurn[0] ?? this.inbox.nextStep.find(message => message.turnParent?.continuationOf !== undefined)
+     try {
+-      this.session.append('turn/start', { turn })
++      const routing = queued?.turnParent
++      if (routing?.continuationOf === undefined) this.session.append('turn/start', { turn, ...routing })
++      else {
++        const parentSeq = this.session.continuationBoundary(routing.continuationOf)
++        if (parentSeq === undefined) throw new Error('queued system continuation must name a completed tree turn')
++        this.session.append('turn/start', { turn, ...routing, parentSeq })
++      }
+     } catch (error: unknown) {
+       this.throwError(error)
+     }
+     phase.turn = turn
+     let turnEnds: TurnEndReason | null = null
+-    let target: InboxTarget = 'next-turn'
++    let queuedId = queued?.id
+     try {
+       while (true) {
+         signal.throwIfAborted()
+         const step = phase.step + 1
+-        const decision = await this.preStep(target, { turn, step })
++        const decision = await this.preStep({ turn, step }, queuedId)
+         if (decision.kind === 'reject') {
+           turnEnds = { kind: 'blocked' }
+           return false
+@@ -361,7 +380,7 @@
+           // still owns the initial turn boundary, but it spends no model call.
+           if (phase.step === 0 && decision.messages.length === 0) {
+             turnEnds = { kind: 'completed' }
+-            return false
++            break
+           }
+           signal.throwIfAborted()
+           this.session.append('step/start', { turn, step })
+@@ -398,12 +417,12 @@
+           decision.toolSet.dispose()
+         }
+         signal.throwIfAborted()
+-        if (turnEnds && this.inbox.nextStep.length === 0) {
++        if (turnEnds && !this.inbox.hasStepInput(turn)) {
+           await this.dispatch.serial('agent/turn-stopping', { turn, signal })
+           signal.throwIfAborted()
+         }
+-        if (turnEnds && this.inbox.nextStep.length === 0) break
+-        target = 'next-step'
++        if (turnEnds && !this.inbox.hasStepInput(turn)) break
++        queuedId = undefined
+       }
+     } catch (error: unknown) {
+       // A cause is present exactly while the signal is aborted.
+--- a/src/inbox.ts
++++ b/src/inbox.ts
+@@ -10,6 +10,7 @@
+ import type {
+   AgentEventDispatch,
+   Inbox as InboxContract,
++  InboxMessage,
+   InboxState,
+   InboxTarget,
+   InboxWireState,
+@@ -18,7 +19,7 @@
+ 
+ /** Wire validation for pending agent input reconstructed from durable inbox splices. */
+ export const inboxProjectionSchema = z.object({
+-  'next-turn': z.array(z.custom<UserMessage>()).readonly(),
++  'next-turn': z.array(z.custom<InboxMessage>()).readonly(),
+   'next-step': z.array(z.custom<UserMessage>()).readonly(),
+ }).readonly()
+ 
+@@ -78,13 +79,22 @@
+   ) {}
+ 
+   /** Prompts awaiting individual turns. */
+-  get nextTurn(): readonly UserMessage[] {
++  get nextTurn(): readonly InboxMessage[] {
+     return this.readState()['next-turn']
+   }
+ 
+   /** Input awaiting the next step boundary. */
+-  get nextStep(): readonly UserMessage[] {
++  get nextStep(): readonly InboxMessage[] {
+     return this.readState()['next-step']
++  }
++
++  /**
++   * Check whether the open turn has more step input.
++   * @param turn - current open turn.
++   * @returns whether it can consume any pending step input before closing.
++   */
++  hasStepInput(turn: number): boolean {
++    return this.nextStep.some(message => message.turnParent?.continuationOf === undefined || message.turnParent.continuationOf === turn)
+   }
+ 
+   /** Whether either pending-message list contains work. */
+@@ -101,15 +111,33 @@
+ 
+   /**
+    * Remove and return the complete batch proposed for one step.
+-   * @param target - whether this boundary also consumes one queued turn.
+    * @param turn - turn that will own the claimed batch.
+-   * @returns next-step input followed by the queued turn, when requested.
+-   */
+-  claim(target: InboxTarget, turn: number): UserMessage[] {
+-    const claimed = this.mutate('next-step', 0, this.nextStep.length, [], false)
+-    if (target === 'next-turn') claimed.push(...this.mutate('next-turn', 0, 1, [], false))
+-    for (const message of claimed) this.dispatch.emit('agent/inbox/claimed', { message, turn })
+-    return claimed
++   * @param queuedId - occurrence selected at turn/start, if the turn opened for a queued message.
++   * @returns next-step input followed by the selected message if it is still pending.
++   */
++  claim(turn: number, queuedId?: MessageId): UserMessage[] {
++    const step = this.nextStep
++    const eligible = step.filter(message => message.turnParent?.continuationOf === undefined
++      || message.turnParent.continuationOf === turn || message.id === queuedId)
++    // A source turn can abort with durable next-step results still pending. Only the
++    // turn that owns each result may claim it, including after a process restart.
++    const claimed = eligible.length === step.length
++      ? this.mutate('next-step', 0, step.length, [], false)
++      : eligible.flatMap((message) => {
++        const index = this.nextStep.findIndex(candidate => candidate.id === message.id)
++        return index < 0 ? [] : this.mutate('next-step', index, 1, [], false)
++      })
++    if (queuedId !== undefined) {
++      const index = this.nextTurn.findIndex(message => message.id === queuedId)
++      if (index >= 0) claimed.push(...this.mutate('next-turn', index, 1, [], false))
++    }
++    const messages = claimed.map((queued) => {
++      if (queued.turnParent === undefined) return queued
++      const { turnParent: _routing, ...message } = queued
++      return Object.freeze(message)
++    })
++    for (const message of messages) this.dispatch.emit('agent/inbox/claimed', { message, turn })
++    return messages
+   }
+ 
+   /**
+@@ -189,7 +217,7 @@
+     deleteCount: number,
+     inserted: UserMessage[],
+     discardRemoved: boolean,
+-  ): UserMessage[] {
++  ): InboxMessage[] {
+     const state = this.readState()
+     const inbox = state[target]
+     const truncatedStart = Math.trunc(start)
+--- a/src/runtime-context.ts
++++ b/src/runtime-context.ts
+@@ -7,7 +7,7 @@
+ 
+ import { createSystemMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
+ import type { ContextFormed, ContextSnapshotSection, Message } from '@deepseek-ai/dsh-llm'
+-import type { Session, SessionEvent, SessionSeq, SurfaceIntent, SystemMessage, UserMessage } from '@deepseek-ai/dsh-session'
++import type { Session, SessionSeq, SurfaceIntent, SystemMessage, UserMessage } from '@deepseek-ai/dsh-session'
+ import { isReplacementSurfaceEvent } from '@deepseek-ai/dsh-session'
+ import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
+ import type { Context } from '@deepseek-ai/cordis'
+@@ -52,12 +52,6 @@
+    * on a route without tool-update support.
+    */
+   startsSeries: boolean
+-}
+-
+-/** Committed events from the newest backward; the restore scans stop at the first match. */
+-function eventsNewestFirst(session: Session): readonly SessionEvent[] {
+-  // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
+-  return session.snapshotEvents().toReversed()
+ }
+ 
+ /**
+@@ -132,8 +126,27 @@
+    * @param session - session receiving projected messages.
+    */
+   constructor(ctx: Context, session: Session) {
++    let generation = session.pathGeneration
++    this.restore(session)
++    ctx.on('session/event', (subject, event) => {
++      if (subject !== session) return
++      if (generation !== session.pathGeneration) {
++        generation = session.pathGeneration
++        this.restore(session)
++      } else if (event.type === 'user/message' && isOwned(event.data)) {
++        this.retained = { seq: event.seq, sections: sectionsOf(event.data) }
++      } else if (this.retained
++        && isReplacementSurfaceEvent(event)
++        && event.sourceEventSeqs?.includes(this.retained.seq) === true) {
++        this.retained = null
++      }
++    })
++  }
++
++  private restore(session: Session): void {
++    this.retained = undefined
+     const surface = new Set(session.surface.nodes)
+-    for (const event of eventsNewestFirst(session)) {
++    for (const event of (session.activePathEvents?.() ?? session.snapshotEvents()).toReversed()) {
+       if (event.type !== 'user/message' || !isOwned(event.data)) continue
+       this.retained ??= null
+       if (surface.has(event.seq)) {
+@@ -141,17 +154,6 @@
+         break
+       }
+     }
+-
+-    ctx.on('session/event', (subject, event) => {
+-      if (subject !== session) return
+-      if (event.type === 'user/message' && isOwned(event.data)) {
+-        this.retained = { seq: event.seq, sections: sectionsOf(event.data) }
+-      } else if (this.retained
+-        && isReplacementSurfaceEvent(event)
+-        && event.sourceEventSeqs?.includes(this.retained.seq) === true) {
+-        this.retained = null
+-      }
+-    })
+   }
+ 
+   /**

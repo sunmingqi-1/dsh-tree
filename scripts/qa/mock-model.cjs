@@ -83,6 +83,16 @@ http
             Array.isArray(m.content) &&
             m.content.some((c) => c.type === 'tool_use' && c.name === name),
         )
+      if (JSON.stringify(messages.at(-1)).includes('acting as a compaction engine')) {
+        await chunks('QA_COMPACT_CHECKPOINT')
+        emit('message_delta', {
+          delta: { stop_reason: 'end_turn', stop_sequence: null },
+          usage: { output_tokens: 5 },
+        })
+        emit('message_stop', {})
+        res.end()
+        return
+      }
       if (all.includes('卡片提问验收') && !used('ask_user_question')) {
         await tool('ask_user_question', {
           questions: [
@@ -101,7 +111,7 @@ http
       }
       if (all.includes('工具流式验收') && !used('read')) {
         await tool('read', {
-          file_path: require('node:path').resolve(__dirname, '../../package.json'),
+          file_path: process.env.DSH_QA_READ_FIXTURE || path.resolve(__dirname, '../../package.json'),
           limit: 3,
         })
         return

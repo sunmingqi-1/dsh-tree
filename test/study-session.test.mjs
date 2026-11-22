@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { build } from 'esbuild'
 import { fileURLToPath } from 'node:url'
+import { rc5Shell } from './rc5-composer.mjs'
 
 const bundle = await build({ entryPoints: [fileURLToPath(new URL('../src/client/study.ts', import.meta.url))],
   platform: 'node', format: 'esm', bundle: true, write: false })
@@ -10,7 +11,8 @@ const tick = () => new Promise(resolve => setImmediate(resolve))
 
 test('原生首问、分支提交和后台事件使用同一份日志，浏览其他节点不会抢走选择', async () => {
   const sessionId = 's', entries = [], listeners = new Set(), prompts = []
-  let parent, refs = 0, revision = 0, change
+  const prepared = []
+  let refs = 0, revision = 0, change
   const eventSource = { getSnapshot: () => ({ entries, revision, change }), subscribe(f) { listeners.add(f); return () => listeners.delete(f) } }
   const add = (type, data) => {
     const entry = { type: 'event', event: { seq: entries.length, time: Date.now(), type, data } }
@@ -20,7 +22,10 @@ test('原生首问、分支提交和后台事件使用同一份日志，浏览�
     for (const f of listeners) f()
     return entry.event.seq
   }
-  const input = { bindPromptParent(f) { parent = f; return () => { parent = undefined } } }
+  const state = { phase: 'plain', draft: 'A', attachmentIds: [] }
+  const input = { state: { getSnapshot: () => state } }
+  const conversation = rc5Shell(input, state)
+  const ordinarySubmit = input.submit
   const binding = { ctx: {}, eventSource, session: {
     loadThrough: async () => {},
     beginSubmission() { return { requestId: crypto.randomUUID(), abandon() {} } },
@@ -28,7 +33,13 @@ test('原生首问、分支提交和后台事件使用同一份日志，浏览�
   } }
   const retain = () => { refs++; return { ready: Promise.resolve(binding), release() { refs-- } } }
   const study = new Study({
-    conversation: { input: { for: () => input } },
+    conversation,
+    connection: { rpc: { async call(channel, method, { args: { request } }) {
+      assert.equal(channel, '/api')
+      assert.equal(method, 'studyTree/preparePrompt')
+      prepared.push(request)
+      return { ok: true }
+    } } },
     sessions: { retain, async using(_, __, f) { const ref = retain(); try { return await f(ref) } finally { ref.release() } } },
     workspaces: { list: { getSnapshot: () => ({ items: [{ sessionIds: [sessionId], workspaceId: 'ws' }] }) } },
     uiSession: { adapter: { current: { getSnapshot: () => ({ key: sessionId }) } } },
@@ -40,14 +51,15 @@ test('原生首问、分支提交和后台事件使用同一份日志，浏览�
   }
   study.armRoot(sessionId)
   await tick()
-  const rootRequest = parent()
+  await input.submit('queue')
+  const [rootRequest] = prepared
   assert.equal(rootRequest.parentSeq, null)
-  rootRequest.onRequest('first')
+  assert.equal(rootRequest.requestId, prompts[0][3])
   const rootId = rootRequest.metadata.studyTree.id
   add('session/tree', {})
-  const rootEnd = run(1, rootId, 'first', null, 'A')
+  const rootEnd = run(1, rootId, rootRequest.requestId, null, 'A')
   assert.equal(study.active, rootId)
-  assert.equal(parent, undefined)
+  assert.equal(input.submit, ordinarySubmit)
   const base = study.nodes[0]
   const second = crypto.randomUUID(), c = crypto.randomUUID()
   run(2, second, 'b', rootEnd, 'B')
@@ -58,7 +70,10 @@ test('原生首问、分支提交和后台事件使用同一份日志，浏览�
   assert.equal(study.active, rootId)
   study.open(second)
   await study.submit(beforeCompact, 'D', null)
-  const [, mode,, requestId, parentSeq, metadata] = prompts[0]
+  const [, mode,, requestId] = prompts[1]
+  const { parentSeq, metadata } = prepared[1]
+  assert.equal(prepared[1].requestId, requestId)
+  assert.equal(prompts[1].length, 4)
   assert.equal(mode, 'queue')
   assert.equal(parentSeq, checkpoint)
   study.open(c)

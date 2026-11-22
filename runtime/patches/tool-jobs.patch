@@ -1,0 +1,94 @@
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -17,7 +17,7 @@
+ import { TextRetainer } from '@deepseek-ai/dsh-output-retention'
+ import { defineTool, ToolArgsError } from '@deepseek-ai/dsh-tools'
+ import type { GenericCallView, ToolDefinition, ToolExecution } from '@deepseek-ai/dsh-tools'
+-import { JobId } from '@deepseek-ai/dsh-jobs'
++import { JobError, JobId } from '@deepseek-ai/dsh-jobs'
+ import type { JobEvent, JobView, JobRead } from '@deepseek-ai/dsh-jobs'
+ import type { Agent } from '@deepseek-ai/dsh-agent'
+ import type {} from '@deepseek-ai/dsh-agent'
+@@ -226,6 +226,12 @@
+   readonly inline: boolean
+   /** The consuming read taken at settlement, absent when the read stayed in the registry. */
+   readonly held?: string
++}
++
++/** Keep unowned jobs and jobs started by turns on the calling model's branch. */
++function visibleJobTurns(agent: Agent | undefined): ReadonlySet<number> | undefined {
++  if (!agent?.session.isTree) return
++  return new Set(agent.session.activePathEvents().flatMap(event => event.type === 'turn/start' ? [event.data.turn] : []))
+ }
+ 
+ /** The consuming read as the model sees it: the delta, then the result once, then the status line. */
+@@ -395,19 +401,24 @@
+     pending.set(event.job.id, {
+       owner: event.job.owner, messageId: message.id, inline: inline !== undefined, ...held === undefined ? {} : { held },
+     })
++    const origin = event.job.originTurn
++    const parentSeq = origin === undefined ? undefined : owner.session.completedTurnBoundary(origin)
++    const routed = origin === undefined ? message : { ...message, turnParent: { continuationOf: origin } }
+     if (delivery === 'wakeup' && owner.status === 'idle') {
+       if (wakeBudget === undefined) {
+-        owner.followup(message)
++        owner.followup(routed)
+         return
+       }
+       const spent = spentWakes.get(owner) ?? 0
+       if (spent < wakeBudget) {
+         spentWakes.set(owner, spent + 1)
+-        owner.followup(message)
++        owner.followup(routed)
+         return
+       }
+     }
+-    owner.inject(message)
++    // A result from a closed turn must not be claimed by a sibling's next step.
++    if (parentSeq !== undefined) owner.inbox.splice('next-turn', Infinity, 0, [routed])
++    else owner.inject(routed)
+   }
+ 
+   ctx.jobs.events.subscribe({ owners: 'scope' }, (event) => {
+@@ -429,6 +440,14 @@
+     deliverSettlement(event)
+   })
+ 
++  const assertVisibleJob = (id: JobId, agent: Agent | undefined): void => {
++    if (!agent?.session.isTree) return
++    const job = ctx.jobs.get(id, agent.id)
++    if (job.originTurn !== undefined && !visibleJobTurns(agent)?.has(job.originTurn)) {
++      throw new JobError(`unknown job ${id}`, 'JOB_NOT_FOUND')
++    }
++  }
++
+   ctx.tools.register(defineTool({
+     name: 'job_output',
+     description: 'Read a background job: output since the previous read for stream jobs, or the result of a finished final-output job.',
+@@ -462,6 +481,7 @@
+       }
+       const jobs = ctx.jobs
+       const agent = exec.agent
++      assertVisibleJob(id, agent)
+       // A wait this execution ends on next-step input claims the read that
+       // follows it: the claim stays open until that read commits, so a
+       // settlement landing first is delivered by the result, not a notice.
+@@ -561,7 +581,9 @@
+     },
+     execute(_args, exec) {
+       const jobs = ctx.jobs.list(exec.agent?.id)
+-      return Promise.resolve(jobs.map(publicJob))
++      const turns = visibleJobTurns(exec.agent)
++      const visible = jobs.filter(job => turns === undefined || job.originTurn === undefined || turns.has(job.originTurn))
++      return Promise.resolve(visible.map(publicJob))
+     },
+     presentCall: () => presentJobCall('List background jobs', 'read'),
+   }))
+@@ -597,6 +619,7 @@
+     execute(args, exec) {
+       const id = validateJobId(args.job_id)
+       const jobs = ctx.jobs
++      assertVisibleJob(id, exec.agent)
+       const result = jobs.kill(id, exec.agent?.id, args.reason)
+       // The model's own kill is its delivery: the settlement notice would only
+       // repeat what this tool result already said.

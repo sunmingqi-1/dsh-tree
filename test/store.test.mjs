@@ -17,7 +17,7 @@ test('并发旧版本写入被拒绝，兄弟节点可以独立保存', async ()
       }),
     },
     effect() {},
-    provide: (key, s) => services.set(key, s),
+    reflect: { provide: (key, s) => services.set(key, s) },
     typert: { register() {} },
   })
   const store = services.get('studyTree'),

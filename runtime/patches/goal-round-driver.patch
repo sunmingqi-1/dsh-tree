@@ -1,0 +1,13 @@
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -176,8 +176,9 @@
+     // proves this goal view is still current.
+     const subagents = ctx.get('subagents')
+     if (subagents !== undefined) {
++      const pathGeneration = agent.session.pathGeneration
+       await Promise.race([subagents.waitForTreeWork(agent), unloading.promise])
+-      if (!readyAfterCheckpoint(state)) return
++      if (!readyAfterCheckpoint(state) || agent.session.pathGeneration !== pathGeneration) return
+     }
+     if (goal.roundsStarted >= goal.maxGoalRounds) {
+       ctx.goals.block(agent, goalRef(goal), {

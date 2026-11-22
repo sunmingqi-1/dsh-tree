@@ -1,0 +1,32 @@
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -5,7 +5,8 @@
+  */
+ 
+ import { createHash, randomUUID } from 'node:crypto'
+-import { SESSION_FORMAT_VERSION, SessionSeq } from '@deepseek-ai/dsh-session'
++import { isTreeMarker } from 'dsh-study-tree/branch-history'
++import { SESSION_FORMAT_VERSION, SessionSeq, snapshotSessionEvent } from '@deepseek-ai/dsh-session'
+ import type { DatabaseSync } from 'node:sqlite'
+ import { Context, Service, type Fiber } from '@deepseek-ai/cordis'
+ import z from '@deepseek-ai/schemastery'
+@@ -224,6 +225,19 @@
+   })
+ 
++  /** Export one exact tree cut through the same branch validator as cold observation. */
++  override async readSession(sessionId: SessionId) {
++    const live = this.ctx.sessions.get(sessionId)
++    if (live !== undefined && !live.isTree) return super.readSession(sessionId)
++    using observation = await this.observeSession(sessionId, { projectionMode: 'none' })
++    if (!live && !observation.events.some(isTreeMarker)) return super.readSession(sessionId)
++    return {
++      session: structuredClone(observation.header),
++      inheritedEventCount: observation.inheritedEventCount,
++      events: observation.events.map(snapshotSessionEvent),
++    }
++  }
++
+   /** Validated and defaulted backend configuration. */
+   readonly config: ResolvedConfig
+ 
+   private readonly _instance = randomUUID()

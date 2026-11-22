@@ -1,5 +1,7 @@
 import { z } from 'zod'
+import { principalOf, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { TreeLog } from '../treeLog.js'
+import { prepareTreePrompt } from './routing.js'
 
 // Native continuation outside the canvas has a canonical session/turn key.
 const id = z.union([z.string().uuid(), z.string().regex(/^.+\/\d+$/)])
@@ -28,9 +30,60 @@ const node = z.object({
 })
 const serviceKey = 'studyTree'
 const json = { mode: 'src-json' }
-export const inject = ['storageDomain', 'typert', 'sessionPersistence']
+const prompt = z.object({
+  sessionId: z.string().min(1),
+  requestId: z.string().min(1),
+  parentSeq: z.number().int().nonnegative().nullable(),
+  metadata: z.object({ studyTree: z.object({ id, anchor: anchor.nullable().optional(), versionOf: id.optional() }) }),
+})
+export const inject = ['storageDomain', 'typert', 'sessionPersistence', 'sessions', 'sessionController', 'remoteAccess']
+
+class StudyTreeRemote extends TypertRemoteService {
+  constructor(ctx, rows) {
+    super(ctx, serviceKey)
+    this.rows = rows
+  }
+
+  // rc.5's sessionController registers a gateway resource reader for every
+  // namespace, extracting request.sessionId before resolving any Agent. Also
+  // require the caller's native prompt permission before declaring a tree.
+  checkPromptAccess(request) {
+    const principal = principalOf(this.ctx.invocation)
+    if (!principal) return
+    const action = 'session/prompt'
+    const decision = this.ctx.remoteAccess.decide({
+      principal, action, resources: [{ kind: 'session', id: request.sessionId }],
+      args: { request: { sessionId: request.sessionId, requestId: request.requestId, mode: 'queue' } },
+    })
+    if (decision.kind !== 'allow') throw new RemoteError('remote-access/denied', '无权在此会话中提问',
+      { action, reason: decision.reason })
+  }
+
+  async preparePrompt(input) {
+    const request = prompt.parse(input)
+    this.checkPromptAccess(request)
+    const found = await this.ctx.sessionController.resolveAgent(request.sessionId)
+    if ('error' in found) throw found.error
+    this.ctx.invocation?.signal?.throwIfAborted()
+    this.checkPromptAccess(request)
+    prepareTreePrompt(this.ctx, found.agent, request)
+    await this.ctx.sessions.flush(found.agent.session)
+    return { prepared: true }
+  }
+
+  async list() {
+    const rows = await this.rows.list()
+    if (!principalOf(this.ctx.invocation)) return rows
+    return rows.filter(row => row.sessionId && this.ctx.remoteAccess.allows({ kind: 'session', id: row.sessionId }))
+  }
+
+  save(input) { return this.rows.save(input) }
+}
 
 export async function apply(ctx) {
+  ctx.inject?.(['sessionLogDeepSeek'], scoped => {
+    scoped.sessionLogDeepSeek.registerExclusion(({ sessionId }) => ctx.sessions.get(sessionId)?.isTree === true)
+  })
   const domain = await ctx.storageDomain.open({
     name: 'study_tree',
     version: 1,
@@ -117,14 +170,13 @@ export async function apply(ctx) {
       return work
     },
   }
-  service.typertRemote = { service, serviceKey, namespace: serviceKey }
-  ctx.provide(serviceKey, service)
+  new StudyTreeRemote(ctx, service)
   ctx.typert.register({
     package: 'dsh-study-tree',
     face: 'host',
     schemas: [],
     model: { services: [], events: [], objects: [] },
-    invocations: ['list', 'save'].map((method) => ({
+    invocations: ['list', 'save', 'preparePrompt'].map((method) => ({
       id: 'dsh-study-tree#studyTree/' + method,
       service: serviceKey,
       namespace: serviceKey,

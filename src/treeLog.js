@@ -17,7 +17,7 @@ export class TreeLog {
   append(event) {
     const { type, seq, data } = event
     this.nextSeq = seq + 1
-    if (type === 'session/tree') this.marked = true
+    if (type === 'session/tree' || (type === 'plugin:study-tree/tree' && event.ignorable === true)) this.marked = true
     if (!this.marked) return
     if (type === 'agent/inbox/spliced' && data.target === 'next-turn') {
       this.queued.splice(data.start, data.removedCount || 0, ...data.inserted)

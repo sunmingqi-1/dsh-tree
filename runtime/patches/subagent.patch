@@ -1,0 +1,173 @@
+--- a/src/manager.ts
++++ b/src/manager.ts
+@@ -52,6 +52,8 @@
+ type ChildDeliveryOptions = {
+   readonly delivery: SubagentDelivery
+   readonly source: MessageSource
++  /** Origin in a direct parent's tree when returning child output. */
++  readonly originTurn?: number | undefined
+   readonly signal: AbortSignal
+   /** Recheck the original model caller at final inbox admission. */
+   readonly authorize?: () => void
+@@ -74,6 +76,7 @@
+   provider: string
+   root: Agent
+   ancestors: readonly SessionId[]
++  originTurn?: number | undefined
+   /** Slash-separated names from the root, undefined when any link is unnamed. */
+   path: string | undefined
+   signal: AbortSignal
+@@ -325,7 +328,7 @@
+   private startLocalNamed(
+     spec: SubagentActivationSpec,
+     prepare: (request: ContinuableCreateRequest) => Promise<ContinuableCreateSpec>,
+-    ancestry: Pick<MaterializeBase, 'root' | 'ancestors'>,
++    ancestry: Pick<MaterializeBase, 'root' | 'ancestors' | 'originTurn'>,
+     reservation: SiblingNameReservation,
+     path: string | undefined,
+   ): Promise<SubagentActivation & { messageId: MessageId }> {
+@@ -450,7 +453,7 @@
+   private startExternalNamed(
+     spec: SubagentActivationSpec,
+     start: (request: ResolvedSubagentStartRequest) => Promise<SubagentRun>,
+-    ancestry: Pick<MaterializeBase, 'root' | 'ancestors'>,
++    ancestry: Pick<MaterializeBase, 'root' | 'ancestors' | 'originTurn'>,
+     reservation: SiblingNameReservation | undefined,
+     path: string | undefined,
+   ): Promise<SubagentActivation> {
+@@ -522,10 +525,11 @@
+   }
+ 
+   /** Capture creation ancestry separately from the root that owns the new instance. */
+-  private ancestryForChild(creator: Agent): Pick<MaterializeBase, 'root' | 'ancestors'> {
++  private ancestryForChild(creator: Agent): Pick<MaterializeBase, 'root' | 'ancestors' | 'originTurn'> {
+     const root = this.rootOf(creator)
+     const ancestors = this.resident.get(creator.id)?.ancestors ?? []
+-    return { root, ancestors: [...ancestors, creator.id] }
++    const originTurn = creator.session.isTree ? this.ctx.agents.turnBoundaryOf(creator.session).lastTurn || undefined : undefined
++    return { root, ancestors: [...ancestors, creator.id], originTurn }
+   }
+ 
+   /** Claim a sibling name against the creator's committed catalog and in-flight siblings. */
+@@ -573,6 +577,7 @@
+     const activation = this.resident.get(sender.id)
+     return this.deliverToMember(root, targetId, [...message.content], {
+       signal: options.signal, delivery: 'steer', source: message.source,
++      originTurn: activation?.ancestors.at(-1) === targetId ? activation.originTurn : undefined,
+       authorize: () => { this.assertAdmitting(sender) },
+       onAccepted: () => {
+         if (activation?.kind === 'local' && activation.ancestors.at(-1) === targetId) {
+@@ -641,7 +646,7 @@
+   }
+ 
+   /** Admit local input synchronously before any teardown can begin. */
+-  private deliver(activation: Activation, message: UserMessage, delivery: SubagentDelivery): void {
++  private deliver(activation: Activation, message: UserMessage, delivery: SubagentDelivery, originTurn?: number): void {
+     if (activation.closing !== undefined) {
+       throw new SubagentError(
+         'subagent activation is being disposed; the message was not accepted',
+@@ -652,8 +657,15 @@
+     if (local.structured?.acceptsInput() === false) {
+       throw new SubagentError('subagent is submitting or has submitted its structured result; the message was not accepted', 'INPUT_CLOSED')
+     }
+-    if (delivery === 'steer') local.handle.agent.steer(message)
+-    else local.handle.agent.followup(message)
++    this.routeInput(local.handle.agent, message, delivery, originTurn)
++  }
++
++  /** Bind output from a completed tree turn at final admission, after any asynchronous preparation. */
++  private routeInput(agent: Agent, message: UserMessage, delivery: SubagentDelivery, originTurn?: number): void {
++    const routed = originTurn === undefined ? message : { ...message, turnParent: { continuationOf: originTurn } }
++    if (originTurn !== undefined && agent.session.completedTurnBoundary(originTurn) !== undefined) agent.followup(routed)
++    else if (delivery === 'steer') agent.steer(routed)
++    else agent.followup(routed)
+   }
+ 
+   /**
+@@ -672,18 +684,17 @@
+    * @param message - durable user message to deliver.
+    * @param delivery - receiving inbox destination.
+    */
+-  private sendWaking(parent: Agent, message: UserMessage, delivery: SubagentDelivery): void {
++  private sendWaking(parent: Agent, message: UserMessage, delivery: SubagentDelivery, originTurn?: number): void {
+     const parentActivation = this.resident.get(parent.id)
+     if (parentActivation !== undefined && activationAgent(parentActivation) === parent) {
+       try {
+-        this.deliver(parentActivation, message, delivery)
++        this.deliver(parentActivation, message, delivery, originTurn)
+       } finally {
+         this.wake(parentActivation)
+       }
+       return
+     }
+-    if (delivery === 'steer') parent.steer(message)
+-    else parent.followup(message)
++    this.routeInput(parent, message, delivery, originTurn)
+   }
+ 
+   /**
+@@ -803,6 +814,11 @@
+     releaseSlot: () => void,
+   ): Promise<Activation> {
+     const { provider, root } = inputs
++    const parentId = inputs.ancestors.at(-1)
++    const parent = parentId === undefined ? undefined : this.ctx.agents.get(parentId)
++    // A resumed member does not carry a fresh creation request; bind its new activation at admission.
++    const originTurn = inputs.originTurn
++      ?? (parent?.session.isTree ? this.ctx.agents.turnBoundaryOf(parent.session).lastTurn || undefined : undefined)
+     inputs.signal.throwIfAborted()
+     let resource: ActivationResource
+     if (inputs.kind === 'external') {
+@@ -876,6 +892,7 @@
+     }
+     const childId = resource.kind === 'local' ? resource.handle.agent.id : resource.run.id
+     const activation: Activation = {
++      originTurn,
+       releaseSlot,
+       childId,
+       runId: SubagentRunId(randomUUID()),
+@@ -1128,10 +1145,13 @@
+         activation.kind === 'local', activation.kind === 'local' && activation.omitClosingText,
+       )
+       if (this.closingTeardownFor(parent) !== undefined) {
+-        parent.inject(message)
++        const parentSeq = activation.originTurn === undefined ? undefined : parent.session.completedTurnBoundary(activation.originTurn)
++        const routed = activation.originTurn === undefined ? message : { ...message, turnParent: { continuationOf: activation.originTurn } }
++        if (parentSeq === undefined) parent.inject(routed)
++        else parent.inbox.splice('next-turn', Infinity, 0, [routed])
+         return
+       }
+-      this.sendWaking(parent, message, parent.status === 'idle' ? 'queue' : 'steer')
++      this.sendWaking(parent, message, parent.status === 'idle' ? 'queue' : 'steer', activation.originTurn)
+     } catch (error: unknown) {
+       this.ctx.logger.warn(
+         `subagent "${activation.childId}" settlement notice was not delivered to its parent: `
+@@ -1176,7 +1196,7 @@
+           options.authorize?.()
+           this.assertAdmitting(root)
+           const message = createUserMessage({ content, source: options.source })
+-          this.sendWaking(root, message, options.delivery)
++          this.sendWaking(root, message, options.delivery, options.originTurn)
+           options.onAccepted?.()
+           return { messageId: message.id }
+         }
+@@ -1304,7 +1324,7 @@
+     options.authorize?.()
+     this.assertAdmitting(parent)
+     try {
+-      this.deliver(activation, message, options.delivery)
++      this.deliver(activation, message, options.delivery, options.originTurn)
+     } finally {
+       this.wake(activation)
+     }
+--- a/src/activation.ts
++++ b/src/activation.ts
+@@ -39,6 +39,8 @@
+  * The manager owns admission, execution handles, and resource release.
+  */
+ interface ActivationBase {
++  /** The tree turn which started or resumed this activation. */
++  readonly originTurn: number | undefined
+   /** Return this epoch's slot after its handle has finished disposal. */
+   readonly releaseSlot: () => void
+   /** The durable child this Activation is an epoch of. */

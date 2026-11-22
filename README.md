@@ -9,7 +9,7 @@
 基于 **DeepSeek Harness** 的树形学习插件。用无限画布组织问答，从不理解的原文展开分支，学完再回到主线。
 
 [![MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![DSH](https://img.shields.io/badge/DSH-0.2.2--rc.3-64748b)](#兼容与版本)
+[![DSH](https://img.shields.io/badge/DSH-0.2.2--rc.5-64748b)](#兼容与版本)
 [![Node](https://img.shields.io/badge/Node.js-24-43853d)](#安装)
 
 [快速开始](#安装) · [使用方法](#如何使用) · [参与贡献](CONTRIBUTING.md) · [反馈问题](https://github.com/sunmingqi-1/dsh-tree/issues)
@@ -52,33 +52,19 @@ flowchart TB
 
 ## 兼容与版本
 
-| 分支 | 定位 | 状态 |
-| --- | --- | --- |
-| **`main`** | 稳定版本 | 0.6.4，本文安装步骤默认使用此分支。 |
-| `feat/native-turn-cards` | 开发版本 | 0.7 系列，新增原生流式过程、过程折叠与卡片内提问/审批。 |
-
-插件 `0.8.1` 适配 **DSH `0.2.2-rc.5`**，构建使用 **Node.js 24**。插件 `0.8.0` 对应 DSH `0.2.2-rc.3`。
-
-开发版的覆盖范围见该分支的[原生单轮卡片验证](https://github.com/sunmingqi-1/dsh-tree/blob/feat/native-turn-cards/docs/原生单轮卡片验证.md)。开发版功能不会自动进入稳定分支。
-
-本分支的单会话学习树需要配套的 DSH `feat/single-session-tree` 宿主和客户端。每棵新树使用一个会话，卡片和划词追问会沿选中的父轮次继续。旧版 fork 树可以回看。重新回答或改写根问题会建立新主题。见[单会话树验收](docs/单会话树验收.md)。
+本分支的 `0.9.0-rc.1` 适配官方 **DeepSeek Harness Desktop 0.2.2-rc.5**。每棵学习树使用一个原生会话和一份按时间追加的日志。从任意已完成的卡片继续提问，模型只读取该卡片的祖先路径，以及这条路径上生效的压缩摘要。卡片保留原始问答和工具过程。
 
 ## 安装
 
-先安装并运行 DeepSeek Harness，再在本地构建本插件：
+下载此版本的插件 `.tgz`，保存到一个固定目录。完全退出 DSH，在 PowerShell 中把路径换成实际下载位置，运行官方插件命令，然后打开 DSH。
 
-```bash
-git clone --branch main https://github.com/sunmingqi-1/dsh-tree.git
-cd dsh-tree
-npm ci
-npm run build
+```powershell
+dsh plugin --profile desktop add (Get-Item 'D:\Downloads\dsh-study-tree-0.9.0-rc.1.tgz').FullName
 ```
 
-在 DSH 的 **「插件 → 添加插件」** 中选择构建后的项目目录，并按界面提示启用。
+插件通过 DSH 的 profile patch 装配会话、模型请求和持久化适配。用户可以直接使用官方桌面安装包和已有的模型配置。学习树的分支读取依赖插件，升级 DSH 前请核对插件支持的宿主版本。旧版 fork 学习树的迁移另行处理。
 
-本插件需要在 DSH 中运行，不是独立网页应用。无需为插件额外配置模型 API Key，继续使用 DSH 已配置的模型。
-
-需要分发本地安装包时，可执行 `npm pack` 生成包含 Host 和浏览器产物的 `.tgz` 文件。目前未提供 npm 注册表安装方式。
+开发者使用 Node.js 24 在插件仓库构建。`npm ci` 会按锁文件安装指定版本的官方 npm 源码，`npm pack` 会构建前后端并输出可安装的包。构建时在内存应用 `runtime/patches/`，包里包含运行产物。验收步骤见[单会话树验收](docs/单会话树验收.md)。
 
 ## 如何使用
 

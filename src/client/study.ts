@@ -2,6 +2,7 @@ import { TreeLog, quoteText } from '../treeLog.js'
 import { readTurn, type Turn, type Anchor } from './tree'
 import { NativeDrafts } from './nativeDrafts'
 import { NativeTurns, NativeInteractions } from './nativeState'
+import { bindBranchInput, sendBranchPrompt } from './branchPrompt'
 export class Study {
   composers = new NativeDrafts(this)
   turns = new NativeTurns()
@@ -82,6 +83,7 @@ export class Study {
     const active = this.active, revision = this.selectionRevision
     return (requestId: string) => { this.sent.set(id, { active, revision, root, requestId }) }
   }
+  forgetSubmission(id: string) { this.sent.delete(id) }
   armRoot(sessionId) {
     if (this.pendingSession === sessionId) return
     this.pendingStop()
@@ -101,9 +103,7 @@ export class Study {
     }
     void ref.ready.then(binding => {
       if (!alive) return
-      const input = this.ctx.conversation.input.for(binding.ctx)
-      if (!input.bindPromptParent) throw new Error('请使用支持单会话树的 DSH 宿主')
-      unbind = input.bindPromptParent(() => {
+      unbind = bindBranchInput(this, binding, sessionId, () => {
         const id = crypto.randomUUID()
         return { parentSeq: null, metadata: { studyTree: { id } }, onRequest: this.onSubmission(id, true) }
       })
@@ -259,22 +259,13 @@ export class Study {
     this.follow(sessionId)
     await this.ctx.sessions.using(sessionId, { source: 'studyTree' }, async ref => {
       const binding = await ref.ready
-      if (!this.ctx.conversation.input.for(binding.ctx).bindPromptParent)
-        throw new Error('请使用支持单会话树的 DSH 宿主')
       const id = crypto.randomUUID()
       const text = anchor ? quoteText(anchor.text) + '\n\n' + question : question
       const handle = binding.session.beginSubmission({ text, mode: 'queue', attachments: [] })
       const meta = { studyTree: { id, ...(versionOf && { versionOf }), ...(anchor && { anchor }) } }
-      this.onSubmission(id)(handle.requestId)
-      try {
-        const result = await binding.session.prompt([{ type: 'text', text }], 'queue', undefined,
-          handle.requestId, parent?.boundarySeq ?? parent?.endSeq ?? null, meta)
-        if (!result.ok) throw new Error(result.error.message)
-      } catch (error) {
-        this.sent.delete(id)
-        handle.abandon()
-        throw error
-      }
+      await sendBranchPrompt(this, sessionId, binding.session, handle, {
+        parentSeq: parent?.boundarySeq ?? parent?.endSeq ?? null, metadata: meta, onRequest: this.onSubmission(id),
+      }, [{ type: 'text', text }])
     })
   }
   observe(turns: Turn[], path: Turn[]) {

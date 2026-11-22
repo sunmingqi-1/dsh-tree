@@ -1,4 +1,5 @@
 import type { Anchor, Turn } from './tree'
+import { bindBranchInput } from './branchPrompt'
 export { quoteText, nativeQuestion } from '../treeLog.js'
 
 function stored(key: string) {
@@ -45,14 +46,19 @@ export class NativeDrafts {
       off()
       unbind()
       ref.release()
-      this.stops.delete(release)
+      this.stops.delete(stop)
       if (this.editor === editor) this.editor = null
     }
-    this.stops.add(release)
+    const stop = () => {
+      alive = false
+      if (released) return
+      if (!editor) release()
+      else if (!editor.busy()) editor.close()
+    }
+    this.stops.add(stop)
     void ref.ready.then(binding => {
       if (!alive) return
       input = this.study.ctx.conversation.input.for(binding.ctx)
-      if (!input.bindPromptParent) throw new Error('请使用支持单会话树的 DSH 宿主')
       const busy = () => !['plain', 'claimed'].includes(input.state.getSnapshot().phase)
       const install = () => {
         if (!alive || busy()) return
@@ -92,7 +98,7 @@ export class NativeDrafts {
           editor.insert(this.deferredQuotes.get(parent.id))
           this.deferredQuotes.delete(parent.id)
         }
-        unbind = input.bindPromptParent(() => {
+        unbind = bindBranchInput(this.study, binding, parent.sessionId, () => {
           const current = this.study.nodes.find(n => n.id === parent.id) || parent
           const id = crypto.randomUUID()
           return { parentSeq: current.boundarySeq ?? current.endSeq,
@@ -114,12 +120,8 @@ export class NativeDrafts {
         off = input.state.subscribe(retry)
         retry()
       } else install()
-    }).catch(error => { if (alive) failed(error.message); release() })
-    return () => {
-      alive = false
-      if (!editor) release()
-      else if (!editor.busy()) editor.close()
-    }
+    }).catch(error => { if (alive) failed(error.message); stop() })
+    return stop
   }
   dispose() {
     for (const stop of this.stops) stop()

@@ -1,3 +1,70 @@
+# rc.5 matches by id and name. Disable each original before mounting its provider.
+- id: session
+  name: '@deepseek-ai/dsh-session'
+  disabled: true
+- id: session-persistence-jsonl
+  name: '@deepseek-ai/dsh-session-persistence-jsonl'
+  disabled: true
+- id: session-projection
+  name: '@deepseek-ai/dsh-session-projection'
+  disabled: true
+- id: session-query-sqlite
+  name: '@deepseek-ai/dsh-session-query-sqlite'
+  disabled: true
+- id: token-meter
+  name: '@deepseek-ai/dsh-token-meter'
+  disabled: true
+- id: goal-round-driver
+  name: '@deepseek-ai/dsh-goal-round-driver'
+  disabled: true
+- id: jobs
+  name: '@deepseek-ai/dsh-jobs-local'
+  disabled: true
+- id: subagent
+  name: '@deepseek-ai/dsh-subagent'
+  disabled: true
+- id: subagent-fork-in-process
+  name: '@deepseek-ai/dsh-subagent-fork-in-process'
+  disabled: true
+- id: agent-loop
+  name: '@deepseek-ai/dsh-agent-loop'
+  disabled: true
+- id: agent-preset-registry
+  inject: [studyTreePresetRouting]
+- id: typert-loader
+  inject: [studyTreePresetRouting]
 - insert:
+    - id: study-tree-session-store
+      name: dsh-study-tree/session-store
+      inject: [studyTreePresetRouting]
+    - id: study-tree-persistence-jsonl
+      name: dsh-study-tree/persistence-jsonl
+      inject: [studyTreePresetRouting]
+    - id: study-tree-session-projection
+      name: dsh-study-tree/session-projection
+      inject: [studyTreePresetRouting]
+    - id: study-tree-session-query
+      name: dsh-study-tree/session-query
+      inject: [studyTreePresetRouting]
+    - id: study-tree-token-meter
+      name: dsh-study-tree/token-meter
+      inject: [studyTreePresetRouting]
+    - id: study-tree-goal-round-driver
+      name: dsh-study-tree/goal-round-driver
+      inject: [studyTreePresetRouting]
+    - id: study-tree-jobs-local
+      name: dsh-study-tree/jobs-local
+      inject: [studyTreePresetRouting]
+    - id: study-tree-subagent
+      name: dsh-study-tree/subagent
+      inject: [studyTreePresetRouting]
+    - id: study-tree-subagent-fork-in-process
+      name: dsh-study-tree/subagent-fork-in-process
+      inject: [studyTreePresetRouting]
+    - id: study-tree-agent-loop
+      name: dsh-study-tree/agent-loop
+      inject: [studyTreePresetRouting]
+    - id: study-tree-preset-routing
+      name: dsh-study-tree/preset-registry
     - id: dsh-study-tree
       name: dsh-study-tree

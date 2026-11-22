@@ -66,7 +66,7 @@ test('清空节点表再启动，list 只依赖宿主日志并增量读取', asy
         close: async () => { closed++ },
       }),
     },
-    effect() {}, provide(_, value) { store = value }, typert: { register() {} },
+    effect() {}, reflect: { provide(_, value) { store = value } }, typert: { register() {} },
   })
   assert.equal((await store.list()).length, 1)
   assert.equal((await store.list()).length, 1)

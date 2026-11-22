@@ -1,0 +1,14 @@
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -46,7 +46,10 @@
+ function completedTurnPrefix(parent: Agent): SessionEvent[] {
+   // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
+   const events = parent.session.snapshotEvents()
+-  const lastEnd = events.findLast(e => e.type === 'turn/end')
++  // Preserve global positions in the seed but end it on the caller's ancestry.
++  const lastEnd = parent.session.isTree
++    ? parent.session.activePathEvents().findLast(event => parent.session.isTurnBoundary(event.seq))
++    : events.findLast(event => event.type === 'turn/end')
+   if (lastEnd === undefined) return []
+   // seq === array index (the append contract), so slice up to and including it.
+   return events.slice(0, lastEnd.seq + 1)
