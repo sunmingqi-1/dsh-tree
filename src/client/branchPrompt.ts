@@ -3,7 +3,7 @@
 // No shared Session, RPC transport or ordinary composer is modified.
 type Branch = {
   parentSeq: number | null
-  metadata: { studyTree: { id: string; anchor?: unknown; versionOf?: string } }
+  metadata: { studyTree: { id: string; anchor?: unknown; versionOf?: string; branchKind?: 'card' | 'quote' } }
   onRequest: (requestId: string) => void
 }
 

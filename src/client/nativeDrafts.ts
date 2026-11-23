@@ -102,7 +102,7 @@ export class NativeDrafts {
           const current = this.study.nodes.find(n => n.id === parent.id) || parent
           const id = crypto.randomUUID()
           return { parentSeq: current.boundarySeq ?? current.endSeq,
-            metadata: { studyTree: { id, ...(source && { anchor: source }) } },
+            metadata: { studyTree: { id, branchKind: kind, ...(source && { anchor: source }) } },
             onRequest: this.study.onSubmission(id),
           }
         })

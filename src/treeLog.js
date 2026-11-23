@@ -89,6 +89,7 @@ export class TreeLog {
     const { question, anchor } = nativeQuestion(text, meta.anchor)
     this.current = {
       id, treeId: this.rootId, parentId: parent?.id || null, question, anchor,
+      ...(parent && (meta.branchKind === 'quote' || meta.branchKind === 'card') && { branchKind: meta.branchKind }),
       created: this.opening.time, sessionId: this.sessionId, requestId: source.rpcId,
       endSeq: null, boundarySeq: null, status: 'sending', error: null, revision: 0,
       ...(parent && { parentTurns: parent.activeTurns || [parent.turn] }),

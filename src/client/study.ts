@@ -1,5 +1,5 @@
 import { TreeLog, quoteText } from '../treeLog.js'
-import { readTurn, type Turn, type Anchor } from './tree'
+import { isQuoteBranch, readTurn, type Turn, type Anchor } from './tree'
 import { NativeDrafts } from './nativeDrafts'
 import { NativeTurns, NativeInteractions } from './nativeState'
 import { bindBranchInput, sendBranchPrompt } from './branchPrompt'
@@ -220,8 +220,9 @@ export class Study {
       const previous = revisions.get(row.id)
       if (row.logged) {
         this.turnNumbers.set(row.id, row.turn)
-        revisions.set(row.id, previous?.logged && (previous.boundarySeq ?? -1) > (row.boundarySeq ?? -1)
-          ? { ...previous, revision: row.revision, title: row.title } : row)
+        const turn = previous?.logged && (previous.boundarySeq ?? -1) > (row.boundarySeq ?? -1) ? previous : row
+        const annotation = previous?.logged && previous.revision > row.revision ? previous : row
+        revisions.set(row.id, { ...turn, revision: annotation.revision, title: annotation.title, mark: annotation.mark })
       } else if ((previous?.revision ?? -1) < row.revision) revisions.set(row.id, row)
     }
     this.nodes = Array.from(revisions.values())
@@ -239,7 +240,7 @@ export class Study {
   async save(n: Turn) {
     const saved = await this.call('save', { request: n })
     const old = this.nodes.find(n => n.id === saved.id)
-    this.merge(old?.logged ? { ...old, title: saved.title, revision: saved.revision } : saved)
+    this.merge(old?.logged ? { ...old, title: saved.title, mark: saved.mark, revision: saved.revision } : saved)
     this.emit()
     return saved as Turn
   }
@@ -262,7 +263,9 @@ export class Study {
       const id = crypto.randomUUID()
       const text = anchor ? quoteText(anchor.text) + '\n\n' + question : question
       const handle = binding.session.beginSubmission({ text, mode: 'queue', attachments: [] })
-      const meta = { studyTree: { id, ...(versionOf && { versionOf }), ...(anchor && { anchor }) } }
+      const original = versionOf && this.nodes.find(n => n.id === versionOf)
+      const branchKind = (original ? isQuoteBranch(original) : !!anchor) ? 'quote' : 'card'
+      const meta = { studyTree: { id, ...(parent && { branchKind }), ...(versionOf && { versionOf }), ...(anchor && { anchor }) } }
       await sendBranchPrompt(this, sessionId, binding.session, handle, {
         parentSeq: parent?.boundarySeq ?? parent?.endSeq ?? null, metadata: meta, onRequest: this.onSubmission(id),
       }, [{ type: 'text', text }])

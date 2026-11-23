@@ -80,6 +80,10 @@ test('清空节点表再启动，list 只依赖宿主日志并增量读取', asy
   assert.equal((await store.list()).find(row => row.id === d).title, '复习 D')
   assert.equal(notes.has(b), false)
   assert.equal(closed, 2)
+  const marked = await store.save({ ...named, mark: 'amber' })
+  assert.equal((await store.list()).find(row => row.id === d).mark, 'amber')
+  await store.save({ ...marked, mark: null })
+  assert.equal((await store.list()).find(row => row.id === d).mark, null)
 })
 
 test('宿主后台轮的独立压缩不能改写可见父卡片的边界', () => {

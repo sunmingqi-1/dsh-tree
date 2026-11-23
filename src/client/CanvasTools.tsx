@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Panel, useReactFlow, useStore } from '@xyflow/react'
-import { Plus, Minus, LocateFixed, Scan, Network, ChevronDown, Check } from 'lucide-react'
+import { Plus, Minus, LocateFixed, Scan, Network, ListTree, ChevronDown, Check } from 'lucide-react'
 
 function LineIcon({ rounded }) {
   return <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -64,7 +64,7 @@ function EdgeMenu({ value, onChange }) {
   </>
 }
 
-export function CanvasTools({ focusCurrent, edgeStyle, onEdgeStyle, onArrange }) {
+export function CanvasTools({ focusCurrent, edgeStyle, onEdgeStyle, onArrange, onExpandAll, hiddenCount }) {
   const flow = useReactFlow(), zoom = useStore(s => Math.round(s.transform[2] * 100))
   return <Panel position="bottom-center" className="st-canvas-tools" role="toolbar" aria-label="画布工具">
     <div className="st-zoom-group">
@@ -75,6 +75,9 @@ export function CanvasTools({ focusCurrent, edgeStyle, onEdgeStyle, onArrange })
     <i className="st-tool-divider" />
     <EdgeMenu value={edgeStyle} onChange={onEdgeStyle} />
     <button className="st-layout-action" aria-label="自动布局" title="自动布局" onClick={onArrange}><Network size={16} /><span>自动布局</span></button>
+    <button className="st-layout-action" aria-label="展开全部" disabled={!hiddenCount}
+      title={hiddenCount ? `展开 ${hiddenCount} 个隐藏节点并重新布局` : '所有节点均已展开'}
+      onClick={onExpandAll}><ListTree size={16} aria-hidden /><span>展开全部</span></button>
     <i className="st-tool-divider" />
     <button aria-label="定位当前节点" title="定位当前节点" onClick={focusCurrent}><LocateFixed size={17} /></button>
     <button aria-label="查看整棵树" title="查看整棵树" onClick={() => flow.fitView({ padding: 0.12, maxZoom: 1, duration: 180 })}><Scan size={17} /></button>

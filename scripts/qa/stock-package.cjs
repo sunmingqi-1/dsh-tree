@@ -1,6 +1,6 @@
-// Windows: node scripts/qa/stock-package.cjs <published.tgz> [DSH install directory]
+// Windows: node scripts/qa/stock-package.cjs <package.tgz or linked plugin directory> [DSH install directory]
 const assert = require('node:assert/strict')
-const { createHash } = require('node:crypto')
+const { createHash, randomUUID } = require('node:crypto')
 const fs = require('node:fs')
 const net = require('node:net')
 const os = require('node:os')
@@ -19,9 +19,10 @@ async function freePort() {
 }
 
 async function main() {
-  assert.ok(process.argv[2], '请输入下载的 .tgz 文件路径')
-  const tarball = fs.realpathSync.native(process.argv[2])
-  assert.ok(tarball.endsWith('.tgz') && fs.statSync(tarball).isFile())
+  assert.ok(process.argv[2], '请输入 .tgz 文件或本地插件目录')
+  const source = fs.realpathSync.native(process.argv[2])
+  const linked = fs.statSync(source).isDirectory()
+  assert.ok(linked || source.endsWith('.tgz'))
   const launcher = process.env.PATH.split(path.delimiter)
     .map(dir => path.join(dir, 'dsh.cmd')).find(file => fs.existsSync(file))
   assert.ok(process.argv[3] || launcher, '请将 DSH 安装目录作为第二个参数传入')
@@ -32,7 +33,8 @@ async function main() {
   assert.ok(fs.existsSync(exe), '请将 DSH 安装目录作为第二个参数传入')
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-stock-package-')))
   console.log('隔离验收目录', root)
-  console.log('安装包 SHA-256', createHash('sha256').update(fs.readFileSync(tarball)).digest('hex'))
+  if (linked) console.log('本地链接', source)
+  else console.log('安装包 SHA-256', createHash('sha256').update(fs.readFileSync(source)).digest('hex'))
   const childEnv = {
     ...process.env,
     DSH_HOME: path.join(root, 'home'), DSH_QA_SESSIONS: path.join(root, 'home/sessions'),
@@ -62,12 +64,14 @@ async function main() {
      initProfile(resolveProfileDir('desktop'), PROFILE_TEMPLATES.web.bundles)`,
   ], officialEnv)
   for (const profile of ['desktop', 'web']) {
-    run(exe, [...cli, 'plugin', '--profile', profile, 'add', tarball], officialEnv)
+    run(exe, [...cli, 'plugin', '--profile', profile, 'add', linked ? 'link:' + source.replaceAll('\\', '/') : source], officialEnv)
     const dir = path.join(childEnv.DSH_HOME, 'profiles', profile)
     const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'package.json')))
     assert.ok(manifest.dsh.profile.bundles.includes('dsh-study-tree'))
-    assert.match(manifest.dependencies['dsh-study-tree'], /^file:/)
-    assert.ok(fs.realpathSync.native(path.join(dir, 'node_modules/dsh-study-tree')).startsWith(root + path.sep))
+    assert.match(manifest.dependencies['dsh-study-tree'], linked ? /^link:/ : /^file:/)
+    const installed = fs.realpathSync.native(path.join(dir, 'node_modules/dsh-study-tree'))
+    if (linked) assert.equal(installed, source)
+    else assert.ok(installed.startsWith(root + path.sep))
   }
   const welcome = '- id: ui-settings-general\n  config:\n    welcomeNoticeVersion: 2026-09-28.1\n'
   fs.writeFileSync(path.join(childEnv.DSH_HOME, 'profiles/web/cordis.patch.yml'), welcome)
@@ -114,6 +118,7 @@ async function main() {
     }
     await boot()
     run(process.execPath, [path.join(__dirname, 'session-paths.cjs')], childEnv)
+    run(process.execPath, [path.join(__dirname, 'large-layout.cjs')], childEnv)
     run(process.execPath, [path.join(__dirname, 'stock-restart.cjs'), 'seed'], childEnv)
     await stop(host)
     await boot()
@@ -123,6 +128,24 @@ async function main() {
       'native-approvals', 'selection-navigation']) {
       run(process.execPath, [path.join(__dirname, test + '.cjs')], childEnv)
     }
+    const url = new URL(fs.readFileSync(childEnv.DSH_QA_LOG, 'utf8').match(/http:\/\/\S+/)[0])
+    assert.ok(['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname))
+    const bootstrap = await fetch(url, { redirect: 'manual' })
+    const cookie = bootstrap.headers.get('set-cookie')?.split(';', 1)[0]
+    assert.ok(cookie, '测试宿主未签发登录 Cookie')
+    const workspace = fs.mkdtempSync(path.join(childEnv.DSH_QA_DOCUMENTS, 'create-'))
+    const method = 'workspace/create'
+    const response = await fetch(new URL('/api/' + method, url), {
+      method: 'POST', headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ type: 'client-request', rpcId: randomUUID(), method, payload: { args: { request: { path: workspace } } } }),
+    })
+    assert.equal(response.status, 200, method + ' HTTP ' + response.status)
+    const { result } = await response.json()
+    assert.equal(result.ok, true, result.error?.message)
+    assert.equal(result.value.created, true)
+    assert.ok(result.value.workspace.workspaceId)
+    assert.equal(fs.realpathSync.native(result.value.workspace.path), fs.realpathSync.native(workspace))
+    console.log('workspace/create 返回 HTTP 200，并创建了测试工作区。')
   } finally {
     await stop(host)
     await stop(mock)

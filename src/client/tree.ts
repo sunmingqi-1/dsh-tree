@@ -17,6 +17,8 @@ export interface Turn {
   startSeq?: number
   boundarySeq?: number | null
   title?: string
+  mark?: keyof typeof import('../nodeMarks.js').nodeMarks | null
+  branchKind?: 'card' | 'quote'
   versionOf?: string
   id: string
   treeId: string
@@ -30,6 +32,13 @@ export interface Turn {
   status: 'preparing' | 'sending' | 'complete' | 'failed' | 'stopped'
   error: string | null
   revision: number
+}
+export function isQuoteBranch(node: { branchKind?: Turn['branchKind']; anchor?: Anchor | null }) {
+  // Sessions written before input origins were recorded only have the quote.
+  return node.branchKind ? node.branchKind === 'quote' : !!node.anchor
+}
+export function branchName(turn: Turn) {
+  return turn.question + (turn.anchor ? ' · ' + turn.anchor.text : '')
 }
 export function pathTo(nodes: Turn[], id: string | null): Turn[] {
   const byId = new Map(nodes.map((n) => [n.id, n]))

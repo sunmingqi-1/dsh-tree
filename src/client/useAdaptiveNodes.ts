@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { applyNodeChanges } from '@xyflow/react'
-import { adaptLayout, type Rect, type Rects } from './adaptive'
-import type { Positions } from './layout'
+import { gestureLayout, type Rect, type Rects } from './adaptive'
+import type { Positions, Sizes } from './layout'
 import { DEFAULT_CARD_SIZE } from './cardSize.ts'
 
-export function nodeRect(node): Rect {
+function nodeRect(node): Rect {
   return {
     ...node.position,
     width: node.width ?? node.measured?.width ?? node.style?.width ?? DEFAULT_CARD_SIZE.width,
@@ -15,7 +15,7 @@ export function nodeRect(node): Rect {
 export function useAdaptiveNodes(nodes, onCommit, interacting) {
   const [display, setDisplay] = useState(nodes)
   const current = useRef(nodes)
-  const gesture = useRef<{ id: string; kind: 'drag' | 'resize'; base: Rects } | null>(null)
+  const gesture = useRef<{ id: string; kind: 'drag' | 'resize'; base: Rects; solve: ReturnType<typeof gestureLayout> } | null>(null)
   const commit = useRef(onCommit)
   commit.current = onCommit
   const publish = useCallback(next => {
@@ -24,10 +24,9 @@ export function useAdaptiveNodes(nodes, onCommit, interacting) {
   }, [])
   const begin = useCallback((id, kind: 'drag' | 'resize') => {
     if (gesture.current) return
-    gesture.current = {
-      id, kind,
-      base: Object.fromEntries(current.current.map(node => [node.id, nodeRect(node)])),
-    }
+    const base: Rects = Object.fromEntries(current.current.map(node => [node.id, nodeRect(node)]))
+    if (!base[id]) return
+    gesture.current = { id, kind, base, solve: gestureLayout(base, id) }
     interacting.current = true
   }, [interacting])
   const solve = useCallback(next => {
@@ -35,15 +34,19 @@ export function useAdaptiveNodes(nodes, onCommit, interacting) {
     if (!g) return next
     const active = next.find(node => node.id === g.id)
     if (!active) return next
-    const sizes = Object.fromEntries(next.map(node => {
-      const { width, height } = nodeRect(node)
-      return [node.id, { width, height }]
-    }))
-    const positions = adaptLayout(g.base, g.id, nodeRect(active), sizes)
+    let sizes: Sizes | undefined
+    for (const node of next) {
+      const base = g.base[node.id]
+      if (!base || node.id === g.id) continue
+      const width = node.width ?? node.measured?.width ?? base.width
+      const height = node.height ?? node.measured?.height ?? base.height
+      if (base.width !== width || base.height !== height) (sizes ??= {})[node.id] = { width, height }
+    }
+    const positions = g.solve(nodeRect(active), sizes)
     return next.map(node => {
-      const point = positions[node.id]
+      const point = positions[node.id] ?? g.base[node.id]
       return !point || (point.x === node.position.x && point.y === node.position.y)
-        ? node : { ...node, position: point }
+        ? node : { ...node, position: { x: point.x, y: point.y } }
     })
   }, [])
   const finish = useCallback((id, finalRect?: Rect) => {
@@ -85,11 +88,14 @@ export function useAdaptiveNodes(nodes, onCommit, interacting) {
 
   useEffect(() => {
     const previous = new Map(current.current.map(node => [node.id, node]))
-    const g = gesture.current
+    let g = gesture.current
+    if (g && (nodes.length !== previous.size || nodes.some(node => !previous.has(node.id)))) {
+      gesture.current = g = null
+      interacting.current = false
+    }
     const next = nodes.map(node => {
       const retained: any = previous.get(node.id)
       const live = g && retained
-      if (g && !g.base[node.id]) g.base[node.id] = nodeRect(node)
       return {
         ...retained, ...node,
         position: live ? retained.position : node.position,
@@ -98,7 +104,7 @@ export function useAdaptiveNodes(nodes, onCommit, interacting) {
       }
     })
     publish(g ? solve(next) : next)
-  }, [nodes, publish, solve])
+  }, [nodes, publish, solve, interacting])
   useEffect(() => () => { interacting.current = false }, [interacting])
   return { display, onNodesChange, begin, finish }
 }

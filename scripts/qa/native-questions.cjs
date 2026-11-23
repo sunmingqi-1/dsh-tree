@@ -49,12 +49,13 @@ const fs = require('node:fs'),
     assert.ok(await panel.evaluate((node, previous) => node === previous, handle))
     const submit = panel.getByRole('button', { name: '提交', exact: true })
     await submit.waitFor()
-    const rect = await submit.boundingBox(),
-      cardRect = await p.locator('.st-card.active').boundingBox()
-    assert.ok(
-      rect.y >= cardRect.y && rect.y + rect.height <= cardRect.y + cardRect.height,
-      'submit must fit card',
-    )
+    // Canvas focus animates after switching cards. Sample both boxes together.
+    const fits = await submit.evaluate(button => {
+      const rect = button.getBoundingClientRect()
+      const cardRect = button.closest('.st-card').getBoundingClientRect()
+      return rect.top >= cardRect.top && rect.bottom <= cardRect.bottom
+    })
+    assert.ok(fits, 'submit must fit card')
     await p.getByRole('button', { name: '收起对话', exact: true }).click()
     await p.waitForTimeout(200)
     assert.ok(await handle.evaluate((e) => e.isConnected))

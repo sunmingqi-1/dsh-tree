@@ -28,7 +28,7 @@ export function turnNumber(snapshot, requestId: string): number | undefined {
 }
 
 export function turnKeys(snapshot, requestId: string, reader = false, visibleTurns?: number[]): string {
-  const turn = turnNumber(snapshot, requestId)
+  const turn = visibleTurns ? undefined : turnNumber(snapshot, requestId)
   const numbers = visibleTurns ?? (turn === undefined ? [] : [turn])
   return numbers.flatMap(number => snapshot.locations.getTurn(number))
     .filter((key) => {
@@ -62,7 +62,7 @@ export function interactionOwner(pending, nodes, bindings, turns) {
   return candidates.find((n) => n.continuations?.some(part => part.turn === turn) || (turns.get(n.id) ?? turnNumber(snapshot, n.requestId)) === turn)?.id
 }
 
-export function processVisibility(node, presentation, expanded: boolean) {
+export function processVisibility(node, presentation, expanded: boolean | null) {
   const spec = presentation?.spec
   const hasContent =
     !!spec &&
@@ -73,7 +73,8 @@ export function processVisibility(node, presentation, expanded: boolean) {
     spec.answerAnchorSeq !== null &&
     spec.answerStep !== null
   )
-  const open = !foldable || expanded
+  const completed = node?.location?.turn?.end?.data?.reason?.kind === 'completed'
+  const open = !foldable || (expanded ?? !completed)
   const outside = ['exchange', 'input', 'turn'].includes(node?.groupTree)
   const hidden = !!(
     node &&

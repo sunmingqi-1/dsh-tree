@@ -59,7 +59,24 @@ function NativeComposerPortal({ study, seat, request, SessionProvider, renderSlo
   const [host] = useState(() => document.createElement('div'))
   useLayoutEffect(() => {
     seat.appendChild(host)
-    return () => host.remove()
+    // DSH focuses its editor on mount. Only an actual editing gesture should
+    // trade reading space for the toolbar; keep that same editor and caret.
+    const edit = () => { host.dataset.studyEditing = '' }
+    const leave = (event: FocusEvent) => {
+      if (!host.contains(event.relatedTarget as Node | null)) delete host.dataset.studyEditing
+    }
+    host.addEventListener('click', edit)
+    host.addEventListener('keydown', edit, true)
+    host.addEventListener('compositionstart', edit)
+    host.addEventListener('focusout', leave)
+    return () => {
+      host.removeEventListener('click', edit)
+      host.removeEventListener('keydown', edit, true)
+      host.removeEventListener('compositionstart', edit)
+      host.removeEventListener('focusout', leave)
+      delete host.dataset.studyEditing
+      host.remove()
+    }
   }, [seat, host])
   useLayoutEffect(() => study.composers.mount(request, setReference, setError), [study, request])
   useEffect(() => {

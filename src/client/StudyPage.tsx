@@ -25,22 +25,31 @@ import {
   Position,
   NodeResizer,
   useStoreApi,
+  type ReactFlowInstance,
+  type Viewport,
 } from '@xyflow/react'
 import Markdown from 'react-markdown'
 import gfm from 'remark-gfm'
 import math from 'remark-math'
 import katex from 'rehype-katex'
-import { pathTo, type Turn } from './tree'
+import { isQuoteBranch, pathTo, type Turn } from './tree'
+import { nodeMarks } from '../nodeMarks.js'
+import { NodeMarkPicker } from './NodeMarkPicker'
+import { directionOf, indexBranches, setBranchFolds, setIndividualFolds, useBranchFolds, visibleBranches } from './branchFolds'
+import { BranchOutlet } from './BranchOutlet'
+import { BranchInlet } from './BranchInlet'
 import { locate, selectionAt } from './selection'
 import { NativeBoundary } from './NativeFrame'
 import { CanvasBackground } from './CanvasBackground'
-import { arrange, extendDown, sizeOf, LAYOUT_VERSION, type Sizes } from './layout'
+import { arrange, extendDown, moveBranches, sizeOf, LAYOUT_VERSION, type Positions, type Sizes } from './layout'
 import { adaptLayout, type Rects } from './adaptive'
 import { useAdaptiveNodes } from './useAdaptiveNodes'
 import { NativeComposerSeat } from './NativeComposer'
 import { CanvasTools } from './CanvasTools'
 import { CanvasMiniMap } from './CanvasMiniMap'
+import { ViewportAnswer } from './ViewportAnswer'
 import { rasterPolicy, headerRasterScale } from './raster'
+import { bindRightPan } from './rightPan'
 import { NativeTurnSeat } from './NativeTurn'
 import { useNodePending, NativeInteractionSeat, RunningStatus } from './NativeInteraction'
 import { DEFAULT_CARD_SIZE, MIN_CARD_SIZE } from './cardSize'
@@ -67,12 +76,12 @@ const Body = React.memo(function Body({ n, text }: { n: Turn; text: string }) {
     </div>
   )
 })
-function Answer({ study, n }) {
+const Answer = React.memo(function Answer({ study, n }) {
   const source = study.answerSource(n.id)
   const text = useSyncExternalStore(source.subscribe, source.getSnapshot)
   return <NativeTurnSeat study={study} node={n}><Body n={n} text={text || n.error || study.issues.get(n.id) ||
     (study.answers.has(n.id) && n.status === 'complete' ? '本轮没有文本回复' : states[n.status])} /></NativeTurnSeat>
-}
+})
 function Composer({ id }) {
   const ui = useContext(UI)
   const node = ui.byId.get(id)
@@ -81,7 +90,7 @@ function Composer({ id }) {
   useLayoutEffect(() => {
     const element = ref.current, card = element?.closest<HTMLElement>('.st-card')
     if (!element || !card) return
-    const observer = new ResizeObserver(() => card.style.setProperty('--st-composer-space', element.offsetHeight + 18 + 'px'))
+    const observer = new ResizeObserver(() => card.style.setProperty('--st-composer-space', element.offsetHeight + 10 + 'px'))
     observer.observe(element)
     return () => { observer.disconnect(); card.style.removeProperty('--st-composer-space') }
   }, [])
@@ -90,12 +99,17 @@ function Composer({ id }) {
     : node.endSeq == null ? <RunningStatus study={ui.study} node={node} />
     : <NativeComposerSeat study={ui.study} parent={node} />}</div>
 }
+function CardStatus({ study, node }) {
+  const pending = useNodePending(study, node)
+  if (pending) return <span className="st-generating">{pending.kind === 'approval' ? '等待审批' : '等待回答'}</span>
+  return node.status === 'sending' || node.status === 'preparing' ? <span className="st-generating">生成中</span> : null
+}
 function Card({ data, resizing: nodeResizing }) {
   const ui = useContext(UI),
     n: Turn = data.turn
   const interaction = useContext(Interaction)
   const active = n.id === ui.active
-  const pending = useNodePending(ui.study, n)
+  const mark = n.mark && nodeMarks[n.mark]
   const customSize = ui.prefs.dimensions[n.id]
   const card = useRef<HTMLElement>(null)
   const header = useRef<HTMLElement>(null)
@@ -129,13 +143,15 @@ function Card({ data, resizing: nodeResizing }) {
   useLayoutEffect(() => {
     if (!header.current || !card.current) return
     headerRasterScale(header.current, flowStore.getState().transform[2])
-    const observer = new ResizeObserver(() => card.current?.style.setProperty('--st-head-space', header.current.offsetHeight + 24 + 'px'))
+    const observer = new ResizeObserver(() => card.current?.style.setProperty('--st-head-space', header.current.offsetHeight + 16 + 'px'))
     observer.observe(header.current)
     return () => observer.disconnect()
   }, [flowStore])
   return (
     <article
       ref={card}
+      data-mark={mark ? n.mark : undefined}
+      style={mark ? { '--st-mark': mark.color } as React.CSSProperties : undefined}
       className={'st-card ' + (active ? 'active ' : '') + (customSize || nodeResizing ? 'sized ' : '') + (ui.pathIds.has(n.id) ? 'onpath' : '')}
       onClick={(event) => {
         if (event.target.closest('[data-answer]') && !window.getSelection()?.isCollapsed) return
@@ -149,34 +165,34 @@ function Card({ data, resizing: nodeResizing }) {
         onResizeStart={() => interaction.begin(n.id, 'resize')}
         onResizeEnd={(_, size) => interaction.finish(n.id, size)}
       />
-      <Handle type="target" position={Position.Top} />
+      <Handle id="incoming" type="target" position={isQuoteBranch(n) ? Position.Left : Position.Top} />
+      {n.parentId && <BranchInlet turn={n} onClick={() => ui.toggleBranch(ui.byId.get(n.parentId), n, true)} />}
       <header className="st-card-head" ref={header}>
         <div className="st-grip">
-        <span className="st-kind">
-          {n.parentId ? <CornerDownRight size={13} /> : <GitBranch size={13} />}{' '}
-          {n.parentId ? (n.anchor ? '引用追问' : '追问') : '学习起点'}
-        </span>
-        <h3 className="st-question nodrag nopan nowheel" title={n.question}>{n.question}</h3>
-        {pending ? <span className="st-generating">{pending.kind === 'approval' ? '等待审批' : '等待回答'}</span>
-          : n.status === 'sending' || n.status === 'preparing' ? <span className="st-generating">生成中</span> : null}
-        <GripHorizontal className="st-drag-hint" size={14} aria-hidden />
+          <span className="st-kind">
+            {n.parentId ? <CornerDownRight size={13} /> : <GitBranch size={13} />}{' '}
+            {n.parentId ? (isQuoteBranch(n) ? '引用追问' : '追问') : '学习起点'}
+          </span>
+          <div className="st-head-topic">
+            <h3 className="st-question nodrag nopan nowheel" title={n.question}>{n.question}</h3>
+            {n.anchor && (
+              <button className="st-quote nodrag" title={n.anchor.text} aria-label={'定位引用原文：' + n.anchor.text}
+                onClick={event => { event.stopPropagation(); ui.back(n) }}>
+                ↖ {n.anchor.text}
+              </button>
+            )}
+          </div>
+          <div className="st-completed-status nodrag nopan" />
+          {n.endSeq == null && <CardStatus study={ui.study} node={n} />}
+          <NodeMarkPicker mark={n.mark} onChange={value => ui.setMark(n, value)} />
+          <GripHorizontal className="st-drag-hint" size={14} aria-hidden />
         </div>
-          {n.anchor && (
-            <button
-              className="st-quote nodrag"
-              title={n.anchor.text}
-              onClick={(e) => {
-                e.stopPropagation()
-                ui.back(n)
-              }}
-            >
-              ↖ {n.anchor.text}
-            </button>
-          )}
       </header>
           <div className="st-answer-region">
           <div className="st-body nodrag nopan nowheel">
-            <Answer study={ui.study} n={n} />
+            <ViewportAnswer defer={data.largeTree && !active && n.endSeq != null}>
+              <Answer study={ui.study} n={n} />
+            </ViewportAnswer>
           </div>
           {n.versionOf && ui.byId.has(n.versionOf) && (
             <button
@@ -191,11 +207,20 @@ function Card({ data, resizing: nodeResizing }) {
           )}
           </div>
           {active && <Composer key={n.id} id={n.id} />}
-      <Handle type="source" position={Position.Bottom} />
+      <Handle id="card" type="source" position={Position.Bottom} />
+      <Handle id="quote" type="source" position={Position.Right} />
+      {(['card', 'quote'] as const).map(direction => (
+        <BranchOutlet key={direction} direction={direction} count={ui.counts.get(n.id)?.[direction] || 0}
+          branches={data.children?.filter(child => directionOf(child) === direction) || []}
+          visible={ui.visibleIds} counts={ui.counts}
+          onToggle={collapse => ui.toggleFold(n, direction, collapse)}
+          onRestore={child => ui.toggleBranch(n, child, false)} />
+      ))}
     </article>
   )
 }
-const nodeTypes = { turn: Card }
+const nodeTypes = { turn: React.memo(Card, (a, b) => a.data === b.data && a.resizing === b.resizing) }
+const emptyPositions: Positions = {}
 const emptyPrefs = () => ({
   tree: null,
   selected: {},
@@ -233,6 +258,8 @@ function readPrefs() {
   }
 }
 
+const noMousePan: number[] = []
+
 // React Flow owns live positions and measurements. Persist coordinates on pointer release.
 function Canvas({
   nodes,
@@ -247,10 +274,17 @@ function Canvas({
   edgeStyle,
   onEdgeStyle,
   onArrange,
+  onExpandAll,
+  hiddenCount,
 }) {
   const { display, onNodesChange, begin, finish } = useAdaptiveNodes(nodes, onCommit, interacting)
   const interaction = React.useMemo(() => ({ begin, finish }), [begin, finish])
   const canvas = useRef<HTMLDivElement>(null), layer = useRef<HTMLElement>(null)
+  const camera = useRef<ReactFlowInstance | null>(null)
+  const rightDragging = useRef(false)
+  const lastSavedView = useRef<Viewport>(view)
+  const saveView = useRef(onView)
+  saveView.current = onView
   const raster = useRef(null)
   if (!raster.current) raster.current = rasterPolicy(() => {
     if (!layer.current?.isConnected) layer.current = canvas.current?.querySelector('.react-flow__viewport') || null
@@ -259,6 +293,29 @@ function Canvas({
     for (const header of layer.current?.querySelectorAll<HTMLElement>('.st-card-head') || [])
       headerRasterScale(header, zoom)
   })
+  const settleView = (view: Viewport) => {
+    raster.current.end(view)
+    const last = lastSavedView.current
+    if (last.x === view.x && last.y === view.y && last.zoom === view.zoom) return
+    lastSavedView.current = view
+    saveView.current(view)
+  }
+  useEffect(() => {
+    const surface = canvas.current?.closest('main')
+    if (!surface) return
+    return bindRightPan(surface, {
+      getViewport: () => camera.current?.getViewport(),
+      move: (view) => { void camera.current?.setViewport(view) },
+      start: (event) => {
+        rightDragging.current = true
+        raster.current.start(event)
+      },
+      end: (view) => {
+        rightDragging.current = false
+        settleView(view)
+      },
+    })
+  }, [])
   return (
     <Interaction.Provider value={interaction}>
     <ReactFlow
@@ -268,10 +325,12 @@ function Canvas({
       edges={edges}
       nodeTypes={nodeTypes}
       defaultViewport={view}
-      onInit={onInit}
-      onMoveStart={event => raster.current.start(event)}
-      onMove={(_, view) => raster.current.change(view)}
-      onMoveEnd={(_, view) => { raster.current.end(view); onView(view) }}
+      onInit={instance => { camera.current = instance; onInit(instance) }}
+      panOnDrag={noMousePan}
+      panActivationKeyCode={null}
+      onMoveStart={event => { if (!rightDragging.current) raster.current.start(event) }}
+      onMove={(_, view) => { if (!rightDragging.current) raster.current.change(view) }}
+      onMoveEnd={(_, view) => { if (!rightDragging.current) settleView(view) }}
       onPaneClick={onBlank}
       onNodesChange={onNodesChange}
       onNodeDragStart={(_, node) => begin(node.id, 'drag')}
@@ -288,6 +347,8 @@ function Canvas({
         edgeStyle={edgeStyle}
         onEdgeStyle={onEdgeStyle}
         onArrange={onArrange}
+        onExpandAll={onExpandAll}
+        hiddenCount={hiddenCount}
       />
     </ReactFlow>
     </Interaction.Provider>
@@ -318,10 +379,15 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
   const byId = React.useMemo(() => new Map(study.nodes.map((n) => [n.id, n])), [study.nodes]),
     path = React.useMemo(() => pathTo(study.nodes, active), [study.nodes, active]),
     pathIds = React.useMemo(() => new Set(path.map((n) => n.id)), [path])
+  const folds = useBranchFolds()
+  const { children, counts } = React.useMemo(() => indexBranches(turns), [turns])
+  const visibleIds = React.useMemo(() => visibleBranches(children, folds, pathIds), [children, folds, pathIds])
+  const visibleTurns = React.useMemo(() => turns.filter(n => visibleIds.has(n.id)), [turns, visibleIds])
   const patch = (props) => setPrefs((p) => ({ ...p, ...props }))
   const field = (name, id, value) =>
     setPrefs((p) => ({ ...p, [name]: { ...p[name], [id]: value } }))
   const select = (n) => {
+    setIndividualFolds(pathTo(study.nodes, n.id), false)
     if (study.active !== n.id) {
       study.setActive(n.id)
       study.emit()
@@ -363,22 +429,19 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     }
   }, [study])
   const sizes = useRef<Sizes>({})
-  const measured = useRef(new Set<string>())
   const interacting = useRef(false)
   for (const [id, size] of Object.entries(prefs.dimensions)) sizes.current[id] = size
-  const layoutInput = useRef({ treeId, turns })
-  layoutInput.current = { treeId, turns }
+  const layoutInput = useRef({ treeId, visibleTurns, visibleIds, children })
+  layoutInput.current = { treeId, visibleTurns, visibleIds, children }
   const measure = React.useCallback((id, size) => {
-    const first = !measured.current.has(id)
-    measured.current.add(id)
     const previous = sizeOf(id, sizes.current)
     sizes.current[id] = size
-    if (interacting.current || (!first && Math.abs(size.height - previous.height) < 1 && Math.abs(size.width - previous.width) < 1)) return
+    if (interacting.current || (Math.abs(size.height - previous.height) < 1 && Math.abs(size.width - previous.width) < 1)) return
     setPrefs((current) => {
-      const { treeId, turns } = layoutInput.current
+      const { treeId, visibleTurns, visibleIds, children } = layoutInput.current
       const stored = current.positions[treeId]
       if (!stored || current.layoutVersions[treeId] !== LAYOUT_VERSION) return current
-      const base: Rects = Object.fromEntries(turns.filter(n => stored[n.id]).map(n => [n.id, {
+      const base: Rects = Object.fromEntries(visibleTurns.filter(n => stored[n.id]).map(n => [n.id, {
         ...stored[n.id], ...(n.id === id ? previous : sizeOf(n.id, sizes.current)),
       }]))
       if (!base[id]) return current
@@ -387,32 +450,40 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
         ? current
         : {
             ...current,
-            positions: { ...current.positions, [treeId]: positions },
+            positions: { ...current.positions, [treeId]: moveBranches(children, stored, visibleIds, positions) },
           }
     })
   }, [])
-  const positions = React.useMemo(
-    () =>
-      prefs.layoutVersions[treeId] === LAYOUT_VERSION
-        ? extendDown(turns, prefs.positions[treeId] || {}, sizes.current)
-        : arrange(turns, sizes.current),
-    [treeId, turns.map((node) => node.id).join(), prefs.positions, prefs.layoutVersions],
-  )
   const migrating = prefs.layoutVersions[treeId] !== LAYOUT_VERSION
+  const stored = prefs.positions[treeId] || emptyPositions
+  const device = useRef({ drafts: prefs.drafts, scroll: prefs.scroll, views: { ...prefs.views } })
+  const lastVisible = useRef(new Set<string>())
+  const positions = React.useMemo(() => {
+    const placed = migrating ? arrange(visibleTurns, sizes.current)
+      : extendDown(visibleTurns, stored, sizes.current, lastVisible.current)
+    return placed === stored ? stored : moveBranches(children, stored, visibleIds, placed)
+  }, [migrating, visibleTurns, stored, children, visibleIds])
   const initialView = migrating
     ? { x: 40 - (positions[active]?.x || 0), y: 52 - (positions[active]?.y || 0), zoom: 1 }
-    : prefs.views[treeId] || { x: 40, y: 52, zoom: 1 }
-  function autoArrange() {
-    if (!treeId || !turns.length) return
-    const positions = arrange(turns, sizes.current)
+    : device.current.views[treeId] || { x: 40, y: 52, zoom: 1 }
+  function autoArrange(scope: 'visible' | 'all') {
+    const all = scope === 'all'
+    const targets = all ? turns : visibleTurns
+    if (!treeId || !targets.length) return
+    const placed = arrange(targets, sizes.current)
+    if (all) setBranchFolds(turns.map(n => [n.id, 'both'] as const), false, children)
     setPrefs((current) => ({
       ...current,
       layoutVersions: { ...current.layoutVersions, [treeId]: LAYOUT_VERSION },
-      positions: { ...current.positions, [treeId]: positions },
+      positions: {
+        ...current.positions,
+        [treeId]: all ? placed : moveBranches(children, current.positions[treeId] || {}, visibleIds, placed),
+      },
     }))
+    const canvas = flow.current
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
-        flow.current?.fitView({ padding: 0.15, maxZoom: 1, duration: 180 })
+        if (flow.current === canvas) canvas?.fitView({ padding: 0.15, maxZoom: 1, duration: 180 })
       }),
     )
   }
@@ -426,7 +497,6 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
       window.removeEventListener('focus', refresh)
     }
   }, [study])
-  const device = useRef({ drafts: prefs.drafts, scroll: prefs.scroll })
   const latest = useRef(prefs)
   const timer = useRef(null)
   const flush = React.useCallback(() => {
@@ -462,17 +532,18 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     study.observe(turns, path)
   }, [study, turns, path])
   useEffect(() => () => study.observe([], []), [study])
-  useEffect(() => {
-    if (!treeId || !turns.length) return
-    if (migrating || turns.some((node) => !prefs.positions[treeId]?.[node.id])) {
-      setPrefs((current) => ({
+  useLayoutEffect(() => {
+    lastVisible.current = visibleIds
+    if (!treeId || !visibleIds.size) return
+    if (migrating || positions !== stored) {
+      if (migrating) device.current.views[treeId] = initialView
+      setPrefs((current) => (current.positions[treeId] || emptyPositions) !== stored ? current : ({
         ...current,
         positions: { ...current.positions, [treeId]: positions },
         layoutVersions: { ...current.layoutVersions, [treeId]: LAYOUT_VERSION },
-        views: migrating ? { ...current.views, [treeId]: initialView } : current.views,
       }))
     }
-  }, [treeId, turns.length, migrating])
+  }, [treeId, visibleIds, migrating, positions, stored])
   useEffect(() => {
     const id = pendingFocus.current
     if (!id || !positions[id] || !flow.current) return
@@ -610,25 +681,31 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
   }
   const nodes = React.useMemo(
     () =>
-      turns.map((n) => ({
+      visibleTurns.map((n) => ({
         id: n.id,
         type: 'turn',
-        data: { turn: n },
+        data: {
+          turn: n,
+          largeTree: visibleTurns.length >= 24,
+          children: children.get(n.id),
+        },
         dragHandle: '.st-grip',
         position: positions[n.id],
         selected: n.id === active,
         style: prefs.dimensions[n.id] ? { ...prefs.dimensions[n.id] } : { ...DEFAULT_CARD_SIZE },
       })),
-    [turns, positions, active, prefs.dimensions],
+    [visibleTurns, children, positions, active, prefs.dimensions],
   )
   const edges = React.useMemo(
     () =>
-      turns
+      visibleTurns
         .filter((n) => n.parentId)
         .map((n) => ({
           id: n.id,
           source: n.parentId,
+          sourceHandle: isQuoteBranch(n) ? 'quote' : 'card',
           target: n.id,
+          targetHandle: 'incoming',
           type: prefs.edgeStyle === 'rounded-step' ? 'smoothstep' : 'default',
           pathOptions: { borderRadius: 12, offset: 24 },
           style: {
@@ -638,7 +715,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
             strokeLinecap: 'round',
           },
         })),
-    [turns, pathIds, prefs.edgeStyle],
+    [visibleTurns, pathIds, prefs.edgeStyle],
   )
   function download(all) {
     const sorted = []
@@ -680,12 +757,27 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
         byId,
         active,
         pathIds,
+        visibleIds,
+        counts,
         busy,
         measure,
         submit,
         pick,
         focus,
         back,
+        setMark: (node, mark) => {
+          void study.save({ ...node, mark }).catch(err => setError(err.message))
+        },
+        toggleFold: (node, direction, collapse) => {
+          if (collapse && children.get(node.id)?.some(child => directionOf(child) === direction && pathIds.has(child.id))) select(node)
+          setSelection(null)
+          setBranchFolds([[node.id, direction]], collapse, children)
+        },
+        toggleBranch: (parent, child, collapse) => {
+          if (collapse && pathIds.has(child.id)) select(parent)
+          setSelection(null)
+          setIndividualFolds([child], collapse)
+        },
         expand: (id, v) => field('expanded', id, v),
         draft: (id) => device.current.drafts[id] || '',
         saveDraft,
@@ -695,7 +787,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
         className="st"
         ref={root}
         onMouseUp={(e) => {
-          if (!e.target.closest('.st-quote-popover, .st-native-composer, .st-selection-actions')) capture(e, false)
+          if (e.button === 0 && !e.target.closest('.st-quote-popover, .st-native-composer, .st-selection-actions')) capture(e, false)
         }}
         onContextMenuCapture={(e) => {
           if (e.target.closest('[data-answer]')) {
@@ -832,10 +924,12 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
                 requestFocus()
               }}
               view={initialView}
-              onView={(v) => field('views', treeId, v)}
+              onView={v => { device.current.views[treeId] = v; schedule() }}
               edgeStyle={prefs.edgeStyle}
               onEdgeStyle={(edgeStyle) => patch({ edgeStyle })}
-              onArrange={autoArrange}
+              onArrange={() => autoArrange('visible')}
+              onExpandAll={() => autoArrange('all')}
+              hiddenCount={turns.length - visibleTurns.length}
               focusCurrent={() => {
                 const n = byId.get(active)
                 if (n) focus(n)
@@ -843,7 +937,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
               interacting={interacting}
               onCommit={(positions, resized) => setPrefs(current => ({
                 ...current,
-                positions: { ...current.positions, [treeId]: positions },
+                positions: { ...current.positions, [treeId]: moveBranches(children, current.positions[treeId] || {}, visibleIds, positions) },
                 dimensions: resized ? { ...current.dimensions, [resized.id]: { width: resized.width, height: resized.height } } : current.dimensions,
               }))}
               onBlank={() => {

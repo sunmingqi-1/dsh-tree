@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { principalOf, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { TreeLog } from '../treeLog.js'
+import { nodeMarks } from '../nodeMarks.js'
 import { prepareTreePrompt } from './routing.js'
 
 // Native continuation outside the canvas has a canonical session/turn key.
@@ -18,6 +19,8 @@ const node = z.object({
   question: z.string().min(1),
   logged: z.literal(true).optional(),
   title: z.string().trim().min(1).max(120).optional(),
+  mark: z.enum(Object.keys(nodeMarks)).nullable().optional(),
+  branchKind: z.enum(['card', 'quote']).optional(),
   versionOf: id.optional(),
   anchor: anchor.nullable(),
   created: z.number(),
@@ -34,7 +37,8 @@ const prompt = z.object({
   sessionId: z.string().min(1),
   requestId: z.string().min(1),
   parentSeq: z.number().int().nonnegative().nullable(),
-  metadata: z.object({ studyTree: z.object({ id, anchor: anchor.nullable().optional(), versionOf: id.optional() }) }),
+  metadata: z.object({ studyTree: z.object({ id, anchor: anchor.nullable().optional(), versionOf: id.optional(),
+    branchKind: z.enum(['card', 'quote']).optional() }) }),
 })
 export const inject = ['storageDomain', 'typert', 'sessionPersistence', 'sessions', 'sessionController', 'remoteAccess']
 
@@ -130,7 +134,7 @@ export async function apply(ctx) {
       for (const { log } of logs.values()) {
         for (const row of log.nodes.values()) {
           const local = table.get(row.id)
-          result.set(row.id, { ...row, revision: local?.revision ?? 0, title: local?.title })
+          result.set(row.id, { ...row, revision: local?.revision ?? 0, title: local?.title, mark: local?.mark })
         }
       }
       return [...result.values()]
@@ -144,7 +148,7 @@ export async function apply(ctx) {
           const durable = rows.find(item => item.logged && item.id === next.id && item.sessionId === next.sessionId)
           if (!durable) throw new Error('未能读取节点的会话日志，请刷新后重试')
           if (durable.revision !== next.revision) throw new Error('节点已更新，请刷新学习树')
-          const saved = { ...durable, title: next.title, revision: next.revision + 1 }
+          const saved = { ...durable, title: next.title, mark: next.mark === undefined ? durable.mark : next.mark, revision: next.revision + 1 }
           await table.put(saved.id, node.parse(saved))
           return saved
         }

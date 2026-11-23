@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { adaptLayout, NODE_GAP } from '../src/client/adaptive.ts'
+import { adaptLayout, gestureLayout, NODE_GAP } from '../src/client/adaptive.ts'
 
 const rect = (x, y, width = 100, height = 80) => ({ x, y, width, height })
 function separated(a, b) {
@@ -64,6 +64,17 @@ test('其他节点流式增长后的真实尺寸也参与碰撞，不改变拖�
   const base = { a: rect(0, 0), b: rect(160, 0), c: rect(320, 0) }
   const sizes = { b: { width: 320, height: 100 } }, next = rect(60, 0)
   verify(base, adaptLayout(base, 'a', next, sizes), 'a', next, sizes)
+})
+
+test('大图的局部推挤与全图求解一致，往返拖动、跨过多张卡和缩小都保留间距', () => {
+  const base = Object.fromEntries(Array.from({ length: 256 }, (_, i) => [String(i), rect(i % 16 * 165, Math.floor(i / 16) * 140)]))
+  const source = base['85'], solve = gestureLayout(base, '85')
+  for (const [dx, dy, width, height] of [[-40, 0, 100, 80], [650, 120, 140, 130], [0, -250, 100, 80], [0, 0, 64, 50], [0, 0, 100, 80]]) {
+    const next = rect(source.x + dx, source.y + dy, width, height)
+    const moved = solve(next)
+    const positions = Object.fromEntries(Object.entries(base).map(([id, r]) => [id, moved[id] || { x: r.x, y: r.y }]))
+    assert.deepEqual(positions, adaptLayout(base, '85', next))
+  }
 })
 
 test('修复已有重叠时确定性结束，没有 NaN 或互相推回的循环', () => {

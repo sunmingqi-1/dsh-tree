@@ -47,7 +47,7 @@ export function NativeTurnSeat({ study, node, children, reader = false }) {
   )
 }
 
-function NativeTurnPortal({ study, seat, node, reader, onReady, reconnect, SessionProvider, renderSlot }) {
+const NativeTurnPortal = React.memo(function NativeTurnPortal({ study, seat, node, reader, onReady, reconnect, SessionProvider, renderSlot }) {
   const [reference, setReference] = useState(null)
   const [error, setError] = useState(''),
     [retry, setRetry] = useState(0)
@@ -117,11 +117,14 @@ function NativeTurnPortal({ study, seat, node, reader, onReady, reconnect, Sessi
       : null
   return createPortal(
     <SessionProvider session={reference}>
-      {renderSlot(turnSeat, { studyNode: node, study, onReady, reader }, { hookContext: flowContext })}
+      {renderSlot(turnSeat, {
+        studyNode: node, study, onReady, reader,
+        statusSeat: reader ? null : seat.closest('.st-card')?.querySelector('.st-completed-status'),
+      }, { hookContext: flowContext })}
     </SessionProvider>,
     seat,
   )
-}
+})
 
 export function NativeTurnBridge({ study, sessionId, SessionProvider, renderSlot }) {
   useStudy(study)
@@ -157,6 +160,8 @@ const NativeRow = React.memo(function NativeRow({ nodeKey, owner }) {
     expanded,
     setExpanded,
     readerNodeId,
+    statusSeat,
+    lastTurn,
     ...callbacks
   } = owner
   const node = useChatNode(nodeKey)
@@ -186,7 +191,7 @@ const NativeRow = React.memo(function NativeRow({ nodeKey, owner }) {
     [turnData, useGroupAction],
   )
   if (!node) return null
-  return (
+  const row = (
     <div
       ref={wrapper}
       className="st-native-row"
@@ -206,12 +211,17 @@ const NativeRow = React.memo(function NativeRow({ nodeKey, owner }) {
       )}
     </div>
   )
+  const turn = node.location.turn
+  return node.kind === 'turn-process' && statusSeat && turn?.end?.data.reason.kind === 'completed'
+    && (lastTurn === undefined || turn.turn === lastTurn)
+    ? createPortal(row, statusSeat) : row
 })
 
 function NativeTurnView(props) {
   const {
     studyNode,
     reader,
+    statusSeat,
     study,
     onReady,
     useChat,
@@ -231,12 +241,14 @@ function NativeTurnView(props) {
     t,
   } = props
   const signature = useChat((snapshot) => turnKeys(snapshot, studyNode.requestId, reader, studyNode.activeTurns ?? (studyNode.logged ? [studyNode.turn] : undefined)))
-  const [expanded, updateExpanded] = useState(() => {
+  const [expanded, updateExpanded] = useState<boolean | null>(() => {
     try {
-      return localStorage.getItem('dsh-study-tree:process:' + studyNode.id) !== 'false'
+      const saved = localStorage.getItem('dsh-study-tree:process:' + studyNode.id)
+      if (saved === 'true' || saved === 'false') return saved === 'true'
     } catch {
-      return true
+      // Without a stored choice, follow the turn's default disclosure.
     }
+    return null
   })
   const setExpanded = React.useCallback(
     (value) => {
@@ -254,6 +266,7 @@ function NativeTurnView(props) {
     return () => { if (study.turns.reveal.get(studyNode.id) === reveal) study.turns.reveal.delete(studyNode.id) }
   }, [study, studyNode.id, setExpanded])
   const cwd = useSessions((snapshot) => snapshot.byId[studyNode.sessionId]?.cwd)
+  const lastTurn = studyNode.activeTurns?.at(-1) ?? studyNode.turn
   const owner = useMemo(
     () => ({
       useChatNode,
@@ -266,6 +279,8 @@ function NativeTurnView(props) {
       inspectCall,
       forkAt: () => study.open(studyNode.id),
       readerNodeId: reader ? studyNode.id : undefined,
+      statusSeat,
+      lastTurn,
       expanded,
       setExpanded,
     }),
@@ -279,6 +294,8 @@ function NativeTurnView(props) {
       loadImage,
       inspectCall,
       forkAt,
+      statusSeat,
+      lastTurn,
       expanded,
       setExpanded,
     ],

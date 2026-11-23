@@ -81,6 +81,7 @@ test('卡片与划词共用一个原生会话，按父节点、选区恢复草�
   const [prompt] = f.prepared
   assert.equal(prompt.parentSeq, 3)
   assert.deepEqual(prompt.metadata.studyTree.anchor, a)
+  assert.equal(prompt.metadata.studyTree.branchKind, 'quote')
   assert.equal(prompt.requestId, f.prompts[0][3])
   assert.equal(prompt.sessionId, 'source')
   assert.equal(f.prompts[0][1], 'queue')
@@ -137,6 +138,7 @@ test('添加到对话保留现有草稿与附件，删除引用后不生成失�
   assert.deepEqual(input.state.getSnapshot().attachmentIds, ['file'])
   await input.submit('queue')
   assert.deepEqual(f.prepared[0].metadata.studyTree.anchor, anchor)
+  assert.equal(f.prepared[0].metadata.studyTree.branchKind, 'card')
   assert.deepEqual(f.prompts[0][0], [{ type: 'file', receiptId: 'file' }, { type: 'text', text: '问题 > 工具 ' }])
   assert.deepEqual(nativeQuestion('单独问题', anchor), { question: '单独问题', anchor: null })
   card.stop()

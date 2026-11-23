@@ -62,7 +62,6 @@
     "test": "node --test"
   },
   "devDependencies": {
-    "@dagrejs/dagre": "^1.1.5",
     "@deepseek-ai/dsh-agent-loop": "0.2.2-rc.5",
     "@deepseek-ai/dsh-goal-round-driver": "0.2.2-rc.5",
     "@deepseek-ai/dsh-jobs-local": "0.2.2-rc.5",
