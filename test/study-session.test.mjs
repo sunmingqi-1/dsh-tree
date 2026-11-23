@@ -51,6 +51,14 @@ test('原生首问、分支提交和后台事件使用同一份日志，浏览�
   }
   study.armRoot(sessionId)
   await tick()
+  assert.equal(study.rootReady, true)
+  study.cancelRoot()
+  assert.equal(study.creating, false)
+  assert.equal(study.pendingSession, null)
+  assert.equal(input.submit, ordinarySubmit)
+  assert.equal(refs, 0)
+  study.armRoot(sessionId)
+  await tick()
   await input.submit('queue')
   const [rootRequest] = prepared
   assert.equal(rootRequest.parentSeq, null)

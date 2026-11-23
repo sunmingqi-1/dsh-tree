@@ -112,6 +112,13 @@ export class Study {
     }).catch(error => { if (alive) { this.error = error.message; this.emit() } })
     this.emit()
   }
+  cancelRoot() {
+    this.pendingStop()
+    this.stopFollowing()
+    this.creating = false
+    this.error = ''
+    this.emit()
+  }
   /** A single resident subscription learns about submissions from every window. */
   follow(sessionId) {
     if (this.followed === sessionId) return

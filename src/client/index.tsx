@@ -111,15 +111,16 @@ export function apply(ctx) {
       { name: 'conversation.hero.options', id: 'dsh-study-tree.new' },
       ({ sessionId }) => {
         useStudy(study)
-        if (study.creating) return null
         return (
           <button
             className="st-native-start"
             type="button"
             aria-label="以学习画布开始"
-            title="以学习画布开始"
+            aria-pressed={study.creating}
+            title={study.creating ? '取消学习画布' : '以学习画布开始'}
             onClick={() => {
-              if (sessionId) study.armRoot(sessionId)
+              if (study.creating) study.cancelRoot()
+              else if (sessionId) study.armRoot(sessionId)
               else study.startNew()
             }}
           >
