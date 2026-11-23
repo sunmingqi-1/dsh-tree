@@ -4,6 +4,7 @@ import { useStudy } from './WorkspaceTree'
 import { StudyPage } from './StudyPage'
 import { NativeTurnSeat } from './NativeTurn'
 import { pathTo } from './tree'
+import { mirrorNativeControl } from './nativeControls'
 
 // Keep the real Conversation mounted in its own slot. Add only the canvas beside it.
 export function NativeFrame({ study, useSessions, usePanelInfo }) {
@@ -123,10 +124,12 @@ export function NativeBoundary({
   return null
 }
 
-// Use the resident native scrollport and one keyed native message renderer per
-// path Turn. Sibling Turns never enter the reader, navigation or scroll policy.
+// Keep the native Session's view selection and stores. Adapt only its Chat
+// outlet to the selected path; statistics and other views retain their renderers.
 export function installPathReader(ctx, study) {
-  return ctx.slots.inject('conversation.session', () => {
+  const source = 'conversation.session'
+  const readerSeat = (name: string) => 'studyTree.reader.' + name
+  return ctx.slots.inject(source, () => {
     function PathReader() {
       useStudy(study)
       return <div className="st-path-reader">
@@ -137,14 +140,26 @@ export function installPathReader(ctx, study) {
         ))}
       </div>
     }
+    function ReaderSession({ renderSlot, ...props }) {
+      return renderSlot(readerSeat(source), props)
+    }
+    const native = mirrorNativeControl(ctx, source, entry => entry.component === ReaderSession,
+      Component => function SessionViews(props) {
+        return <Component {...props} renderSlot={(name, owner, options) =>
+          name === 'conversation.view' && options?.only === 'chat'
+            ? <PathReader /> : props.renderSlot(name, owner, options)} />
+      }, readerSeat)
     let stop: (() => void) | undefined
     const sync = () => {
       if (study.enabled && !stop)
-        stop = ctx.slots.register({ name: 'conversation.session', id: 'dsh-study-tree.path', priority: -100 }, PathReader)
+        stop = ctx.slots.register({
+          name: source, id: 'dsh-study-tree.path', priority: -100,
+          children: { [readerSeat(source)]: { kind: 'single', scope: 'session' } },
+        }, ReaderSession)
       else if (!study.enabled && stop) { stop(); stop = undefined }
     }
     study.listeners.add(sync)
     sync()
-    return () => { study.listeners.delete(sync); stop?.() }
+    return () => { study.listeners.delete(sync); stop?.(); native() }
   })
 }

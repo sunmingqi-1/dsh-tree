@@ -73,6 +73,8 @@ async function main() {
     if (linked) assert.equal(installed, source)
     else assert.ok(installed.startsWith(root + path.sep))
   }
+  run(exe, [...cli, 'plugin', '--profile', 'web', 'add',
+    '@deepseek-ai/dsh-experimental-client-ui-stats@0.2.2-rc.5'], officialEnv)
   const welcome = '- id: ui-settings-general\n  config:\n    welcomeNoticeVersion: 2026-09-28.1\n'
   fs.writeFileSync(path.join(childEnv.DSH_HOME, 'profiles/web/cordis.patch.yml'), welcome)
   const mockPort = await freePort()
@@ -124,8 +126,8 @@ async function main() {
     await boot()
     run(process.execPath, [path.join(__dirname, 'stock-restart.cjs'), 'restore'], childEnv)
     fs.writeFileSync(childEnv.DSH_QA_READ_FIXTURE, 'stock tool read\n')
-    for (const test of ['native-turns', 'native-reload', 'native-questions',
-      'native-approvals', 'selection-navigation']) {
+    for (const test of ['native-views', 'native-turns', 'native-reload', 'native-questions',
+      'native-approvals', 'selection-navigation', 'workspace-selection']) {
       run(process.execPath, [path.join(__dirname, test + '.cjs')], childEnv)
     }
     const url = new URL(fs.readFileSync(childEnv.DSH_QA_LOG, 'utf8').match(/http:\/\/\S+/)[0])
