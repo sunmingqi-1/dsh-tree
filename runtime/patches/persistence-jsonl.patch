@@ -1,0 +1,105 @@
+--- a/src/storage.ts
++++ b/src/storage.ts
+@@ -9,6 +9,7 @@
+  * @module
+  */
+ 
++import { encodeTreeRows, isTreeMarker } from 'dsh-study-tree/branch-history'
+ import type { Context } from '@deepseek-ai/cordis'
+ import { errorChain } from '@deepseek-ai/dsh-llm'
+ import type { Session, SessionEvent, SessionHeader, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
+@@ -83,6 +84,7 @@
+  * window and drain through the same chain as explicit appends.
+  */
+ export class JsonlSessionHandle implements SessionHandle {
++  private tree = false
+   private chain: Promise<unknown> = Promise.resolve()
+   private closing: Promise<void> | undefined
+   private observedLength = 0
+@@ -101,7 +103,7 @@
+     private readonly state: StorageHandleState,
+     /** The cross-process write lock; a create handle acquires it lazily at first materialization. */
+     private lease?: SessionWriteLease,
+-  ) {}
++  ) { this.tree = state.primed?.events.some(isTreeMarker) ?? false }
+ 
+   /** Exact fork-inherited prefix length stored with this session's log. */
+   get inheritedEventCount(): SessionLogOffset {
+@@ -331,11 +333,14 @@
+     }
+     if (this.state.recoveredTail !== undefined) {
+       if (this.state.recoveredTail.length > 0) {
+-        await this.storage.persistBatch(this.header, this.state.recoveredTail, this.state.materialized, this.state.inheritedEventCount)
++        await this.storage.persistBatch(this.header, this.tree ? encodeTreeRows(this.state.recoveredTail, true) : this.state.recoveredTail, this.state.materialized, this.state.inheritedEventCount)
+       }
+       this.state.recoveredTail = undefined
+     }
+-    await this.storage.persistBatch(this.header, batch, this.state.materialized, this.state.inheritedEventCount)
++    const hasMarker = !this.tree && batch.some(isTreeMarker)
++    const physical = this.tree || hasMarker ? encodeTreeRows(batch, this.tree) : batch
++    await this.storage.persistBatch(this.header, physical, this.state.materialized, this.state.inheritedEventCount)
++    if (hasMarker) this.tree = true
+     this.state.materialized = true
+     this.state.cursor += batch.length
+     this.state.primed = undefined
+--- a/src/format.ts
++++ b/src/format.ts
+@@ -8,6 +8,7 @@
+  * @module dsh-session-persistence-jsonl/format
+  */
+ 
++import { decodeTreeRows, encodeTreeRows, isTreeMarker } from 'dsh-study-tree/branch-history'
+ import { isAbsolute, join } from 'node:path'
+ import {
+   SESSION_FORMAT_VERSION,
+@@ -465,11 +466,15 @@
+   finish(): SessionLogScan {
+     this.finished = true
+     const artifact = this.restore.finish()
+-    assertReleasedV4Relationships(artifact, KNOWN_SESSION_EVENT_TYPES)
++    const tree = artifact.events.some(isTreeMarker)
++    // Older learning-tree builds used native replacement rows. Validate the
++    // physical v4 lifecycle independently of their branch-relative spans.
++    const physical = tree ? { ...artifact, events: encodeTreeRows(artifact.events) } : artifact
++    assertReleasedV4Relationships(physical, KNOWN_SESSION_EVENT_TYPES)
+     return {
+       meta: this.meta,
+       inheritedEventCount: SessionLogOffset(artifact.inheritedEventCount),
+-      events: artifact.events as unknown as SessionEvent[],
++      events: (tree ? decodeTreeRows(artifact.events) : artifact.events) as unknown as SessionEvent[],
+       committedBytes: this.committedBytes,
+     }
+   }
+@@ -490,6 +495,9 @@
+     // This scanner accepts only current-generation files. Owned structural refusal must
+     // precede its recoverable-tail suppression, independently of the strict decoder state.
+     try {
++      if (typeof decoded === 'object' && decoded !== null && 'type' in decoded && decoded.type === 'session/tree') {
++        decoded = { ...decoded, type: 'plugin:study-tree/tree', ignorable: true }
++      }
+       assertV4RowAdmission(decoded, KNOWN_SESSION_EVENT_TYPES)
+     } catch (error: unknown) {
+       if (error instanceof SessionFormatUnsupportedMigrationError) throw new SessionFormatUnsupportedError(error.message)
+--- a/src/migration-verifier.ts
++++ b/src/migration-verifier.ts
+@@ -74,7 +74,7 @@
+   /* v8 ignore next 3 -- built-worker coverage owns the bundled path. */
+   if (!import.meta.url.endsWith('.ts')) {
+     return {
+-      entry: new URL('./worker.cjs', import.meta.url),
++      entry: new URL('./worker.cjs', import.meta.resolve('@deepseek-ai/dsh-session-persistence-jsonl')),
+       options: { workerData: request, execArgv: [] },
+     }
+   }
+--- a/src/win32.ts
++++ b/src/win32.ts
+@@ -53,7 +53,8 @@
+ /** Load the small Win32 API lazily so non-Windows processes never load Koffi. */
+ async function win32(): Promise<Win32Bindings> {
+   if (bindings !== undefined) return bindings
+-  const koffi = (await import('koffi')).default
++  const { createRequire } = await import('node:module')
++  const koffi = createRequire(import.meta.resolve('@deepseek-ai/dsh-session-persistence-jsonl'))('koffi')
+   const kernel32 = koffi.load('kernel32.dll')
+   bindings = {
+     moveFileExW: kernel32.func('__stdcall', 'MoveFileExW', 'int', ['str16', 'str16', 'uint']) as MoveFileExW,

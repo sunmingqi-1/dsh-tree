@@ -1,0 +1,75 @@
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -44,6 +44,7 @@
+ 
+ /** Rebuildable positional prices, excluded from projection checkpoints. */
+ interface ReplayState {
++  readonly pathGeneration: number
+   consumedEvents: SessionLogOffsetType
+   surface: MeterSurfaceNode[]
+   header: { seq: SessionSeqType | null; value: EpochHeader } | undefined
+@@ -230,8 +231,11 @@
+   /** Catch rebuildable prices up to the current durable tail. */
+   private _sync(session: Session, useProjection = true): { prices: ReplayState; measurement: MeasurementState } {
+     let state = this.states.get(session)
+-    if (state === undefined) {
++    let path: readonly SessionEvent[] | undefined
++    if (state === undefined || state.pathGeneration !== session.pathGeneration) {
++      if (session.pathGeneration > 0) path = session.activePathEvents()
+       state = {
++        pathGeneration: session.pathGeneration,
+         consumedEvents: SessionLogOffset(0),
+         surface: [],
+         header: undefined,
+@@ -242,10 +246,11 @@
+       this.states.set(session, state)
+     }
+     const projected = useProjection ? this.measurementProjectionHandle?.stateOf(session) : undefined
++    let pathIndex = 0
+     while (state.consumedEvents < session.seq) {
+       // Cold price caches may replay resident history.
+       // oxlint-disable-next-line typescript/no-non-null-assertion, typescript/no-deprecated
+-      const event = session.eventAt(SessionSeq(state.consumedEvents))!
++      const event = path === undefined ? session.eventAt(SessionSeq(state.consumedEvents))! : path[pathIndex++]!
+       const next = projected !== undefined
+         ? undefined
+         : measurementProjectionDefinition.apply(state.pendingMeasurement, event)
+@@ -257,7 +262,7 @@
+       }
+       this._foldEvent(state, event)
+       if (next !== undefined) state.pendingMeasurement = next
+-      state.consumedEvents = SessionLogOffset(state.consumedEvents + 1)
++      state.consumedEvents = SessionLogOffset(event.seq + 1)
+     }
+     if (projected !== undefined && (projected.headerSeq !== (state.header?.seq ?? null)
+       || (projected.anchor !== null && projected.anchor.headerSeq !== (state.anchorHeader?.seq ?? null)))) {
+--- a/src/measurement-projection.ts
++++ b/src/measurement-projection.ts
+@@ -84,6 +84,7 @@
+ /** Host-only measurement facts, independent of session and surface length. */
+ export const measurementProjectionDefinition = {
+   key: 'tokenMeasurement',
++  history: 'active-path',
+   stateVersion: 2,
+   stateSchema: measurementStateSchema,
+   init: (): MeasurementState => ({ headerSeq: null, stepStart: null, anchor: null, invalidSeq: null }),
+--- a/src/usage-projection.ts
++++ b/src/usage-projection.ts
+@@ -166,6 +166,7 @@
+  */
+ export const contextPressureProjectionDefinition = {
+   key: 'contextPressure',
++  history: 'active-path',
+   stateVersion: 5,
+   stateSchema: contextPressureStateSchema,
+   init: () => ({ surfaceTokens: 0 }),
+--- a/src/breakdown-projection.ts
++++ b/src/breakdown-projection.ts
+@@ -143,6 +143,7 @@
+  */
+ export const contextBreakdownProjectionDefinition = {
+   key: 'contextBreakdown',
++  history: 'active-path',
+   stateVersion: 6,
+   stateSchema: contextBreakdownStateSchema,
+   init: (): ContextBreakdownState => ({

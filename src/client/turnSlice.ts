@@ -27,16 +27,15 @@ export function turnNumber(snapshot, requestId: string): number | undefined {
   }
 }
 
-export function turnKeys(snapshot, requestId: string): string {
-  const turn = turnNumber(snapshot, requestId)
-  if (turn === undefined) return ''
-  return snapshot.locations
-    .getTurn(turn)
+export function turnKeys(snapshot, requestId: string, reader = false, visibleTurns?: number[]): string {
+  const turn = visibleTurns ? undefined : turnNumber(snapshot, requestId)
+  const numbers = visibleTurns ?? (turn === undefined ? [] : [turn])
+  return numbers.flatMap(number => snapshot.locations.getTurn(number))
     .filter((key) => {
       const node = snapshot.nodes.get(key)
       return (
         node &&
-        !['user', 'steering', 'context', 'system-prompt', 'inherited-history'].includes(node.kind)
+        (reader || !['user', 'steering', 'context', 'system-prompt', 'inherited-history'].includes(node.kind))
       )
     })
     .join('\u001f')
@@ -60,10 +59,10 @@ export function interactionOwner(pending, nodes, bindings, turns) {
     turn = bindings.get(pending.sessionId)?.openTurn.getSnapshot()
   }
   if (turn === undefined) return undefined
-  return candidates.find((n) => (turns.get(n.id) ?? turnNumber(snapshot, n.requestId)) === turn)?.id
+  return candidates.find((n) => n.continuations?.some(part => part.turn === turn) || (turns.get(n.id) ?? turnNumber(snapshot, n.requestId)) === turn)?.id
 }
 
-export function processVisibility(node, presentation, expanded: boolean) {
+export function processVisibility(node, presentation, expanded: boolean | null) {
   const spec = presentation?.spec
   const hasContent =
     !!spec &&
@@ -74,7 +73,8 @@ export function processVisibility(node, presentation, expanded: boolean) {
     spec.answerAnchorSeq !== null &&
     spec.answerStep !== null
   )
-  const open = !foldable || expanded
+  const completed = node?.location?.turn?.end?.data?.reason?.kind === 'completed'
+  const open = !foldable || (expanded ?? !completed)
   const outside = ['exchange', 'input', 'turn'].includes(node?.groupTree)
   const hidden = !!(
     node &&

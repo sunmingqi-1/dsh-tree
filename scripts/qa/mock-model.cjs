@@ -13,6 +13,7 @@ http
       const b = JSON.parse(raw || '{}'),
         messages = b.messages || [],
         all = JSON.stringify(messages)
+      const pause = all.includes('QA_LAYOUT_SCALE') ? () => Promise.resolve() : sleep
       if (b.tools?.length)
         fs.writeFileSync(
           path.join(output, 'native-tool-schema.json'),
@@ -55,7 +56,7 @@ http
         for (const piece of text.match(/.{1,12}/gs) || []) {
           if (res.destroyed) return
           emit('content_block_delta', { index, delta: { type: 'text_delta', text: piece } })
-          await sleep(160)
+          await pause(160)
         }
         emit('content_block_stop', { index })
       }
@@ -83,6 +84,16 @@ http
             Array.isArray(m.content) &&
             m.content.some((c) => c.type === 'tool_use' && c.name === name),
         )
+      if (JSON.stringify(messages.at(-1)).includes('acting as a compaction engine')) {
+        await chunks('QA_COMPACT_CHECKPOINT')
+        emit('message_delta', {
+          delta: { stop_reason: 'end_turn', stop_sequence: null },
+          usage: { output_tokens: 5 },
+        })
+        emit('message_stop', {})
+        res.end()
+        return
+      }
       if (all.includes('卡片提问验收') && !used('ask_user_question')) {
         await tool('ask_user_question', {
           questions: [
@@ -101,7 +112,7 @@ http
       }
       if (all.includes('工具流式验收') && !used('read')) {
         await tool('read', {
-          file_path: require('node:path').resolve(__dirname, '../../package.json'),
+          file_path: process.env.DSH_QA_READ_FIXTURE || path.resolve(__dirname, '../../package.json'),
           limit: 3,
         })
         return
@@ -116,11 +127,11 @@ http
         return
       }
       await chunks('### 原生流式回答\n\n第一段已经到达。这段内容应当在本轮结束前显示。\n\n')
-      await sleep(1200)
+      await pause(1200)
       await chunks(
         '第二段正在追加：**运行循环**会逐步执行模型与工具。\n\n```js\nconst turn = "streaming";\n```\n\n',
       )
-      await sleep(1200)
+      await pause(1200)
       await chunks('第三段是最终结果。本轮结束后才显示继续提问输入框。')
       emit('message_delta', {
         delta: { stop_reason: 'end_turn', stop_sequence: null },

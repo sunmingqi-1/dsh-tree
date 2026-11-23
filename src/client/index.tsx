@@ -2,7 +2,7 @@ import React from 'react'
 import { GitBranch } from 'lucide-react'
 import { Study } from './study'
 import { WorkspaceTree, NewStudyButton, useStudy } from './WorkspaceTree'
-import { NativeFrame } from './NativeFrame'
+import { NativeFrame, installPathReader } from './NativeFrame'
 import { NativeComposerBridge, installSharedComposer, installBranchComposer } from './NativeComposer'
 import { controlSeat } from './nativeControls'
 import { NativeTurnBridge, installNativeTurns, nativeTurnSpec, turnSeat } from './NativeTurn'
@@ -103,7 +103,7 @@ export function apply(ctx) {
     ),
   )
   ctx.effect(() => {
-    const stops = [installSharedComposer(ctx, study), installBranchComposer(ctx), installNativeTurns(ctx), installNativeInteractions(ctx, study), installNativeWorkspace(ctx, study)]
+    const stops = [installPathReader(ctx, study), installSharedComposer(ctx, study), installBranchComposer(ctx), installNativeTurns(ctx), installNativeInteractions(ctx, study), installNativeWorkspace(ctx, study)]
     return () => stops.forEach(stop => stop())
   })
   ctx.slots.inject('conversation.hero.options', () =>

@@ -153,7 +153,7 @@ export function RunningStatus({ study, node }) {
       if (!binding) return
       const conversation = study.ctx.uiConversation.binding(binding)
       const chat = conversation.target('chat').getSnapshot()
-      const turn = study.turnNumbers.get(node.id) ?? (chat && turnNumber(chat, node.requestId))
+      const turn = node.activeTurns?.at(-1) ?? study.turnNumbers.get(node.id) ?? (chat && turnNumber(chat, node.requestId))
       if (
         turn === undefined ||
         !binding.session.getSnapshot().running ||

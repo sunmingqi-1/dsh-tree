@@ -9,7 +9,16 @@ export function isUserPrompt(event) {
   return event.type === 'user/message' && !!source?.rpcId && (!source.kind || source.kind === 'user')
 }
 export interface Turn {
+  logged?: boolean
+  turn?: number
+  activeTurns?: number[]
+  parentTurns?: number[]
+  continuations?: { turn: number; startSeq: number }[]
+  startSeq?: number
+  boundarySeq?: number | null
   title?: string
+  mark?: keyof typeof import('../nodeMarks.js').nodeMarks | null
+  branchKind?: 'card' | 'quote'
   versionOf?: string
   id: string
   treeId: string
@@ -24,6 +33,13 @@ export interface Turn {
   error: string | null
   revision: number
 }
+export function isQuoteBranch(node: { branchKind?: Turn['branchKind']; anchor?: Anchor | null }) {
+  // Sessions written before input origins were recorded only have the quote.
+  return node.branchKind ? node.branchKind === 'quote' : !!node.anchor
+}
+export function branchName(turn: Turn) {
+  return turn.question + (turn.anchor ? ' · ' + turn.anchor.text : '')
+}
 export function pathTo(nodes: Turn[], id: string | null): Turn[] {
   const byId = new Map(nodes.map((n) => [n.id, n]))
   const seen = new Set<string>()
@@ -32,13 +48,14 @@ export function pathTo(nodes: Turn[], id: string | null): Turn[] {
     const n = byId.get(id)
     if (!n) break
     seen.add(id)
-    path.unshift(n)
+    const inherited = path[0]?.parentTurns
+    path.unshift(inherited && n.continuations?.length ? { ...n, activeTurns: inherited } : n)
     id = n.parentId
   }
   return path
 }
 
-export function readTurn(entries, requestId: string) {
+export function readTurn(entries, requestId: string | undefined, startSeq?: number) {
   let startTurn = null
   let matched = false
   let endSeq = null
@@ -57,15 +74,26 @@ export function readTurn(entries, requestId: string) {
     }
     return state
   }
-  for (const { event } of entries) {
+  let low = 0
+  if (startSeq !== undefined) {
+    let high = entries.length
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2)
+      if (entries[mid].event.seq < startSeq) low = mid + 1
+      else high = mid
+    }
+  }
+  for (let i = low; i < entries.length; i++) {
+    const { event } = entries[i]
     const { type, data } = event
     if (type === 'turn/start') {
       // Once the request is located, its boundary never moves to a later turn.
       if (matched) break
       startTurn = data.turn
+      if (event.seq === startSeq && (requestId === undefined || data.requestId === requestId)) matched = true
       currentStep = 0
     }
-    if (type === 'user/message' && data.source?.rpcId === requestId) matched = true
+    if (requestId && type === 'user/message' && data.source?.rpcId === requestId) matched = true
     if (!matched || data.turn !== startTurn) continue
     if (type === 'turn/end') {
       endSeq = event.seq

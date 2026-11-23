@@ -1,6 +1,8 @@
-import React, { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import React, { useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 import { ChevronRight, GitBranch, Plus, PanelRightClose } from 'lucide-react'
 import { pathTo } from './tree'
+import { isFolded, setBranchFolds, useBranchFolds } from './branchFolds'
+import { nodeMarks } from '../nodeMarks.js'
 
 export function useStudy(study) {
   return useSyncExternalStore(
@@ -10,14 +12,6 @@ export function useStudy(study) {
     },
     () => study.version,
   )
-}
-
-function savedFolds() {
-  try {
-    return JSON.parse(localStorage.getItem('dsh-study-tree:folds') || '{}')
-  } catch {
-    return {}
-  }
 }
 
 // The native browser owns grouping, search, sorting, and ordinary Session rows.
@@ -31,7 +25,7 @@ export function WorkspaceTree({
   useStudy(study)
   const { getTriggerProps } = useContextMenu()
   const node = study.nodes.find((item) => !item.parentId && item.sessionId === sessionId)
-  const [folds, setFolds] = useState(savedFolds)
+  const folds = useBranchFolds()
   const rootRef = useRef<HTMLSpanElement>(null)
   const elected = !!node
   useLayoutEffect(() => {
@@ -51,15 +45,6 @@ export function WorkspaceTree({
       }
     }
   }, [elected])
-  useEffect(() => {
-    const update = () => setFolds(savedFolds())
-    window.addEventListener('storage', update)
-    window.addEventListener('study-tree-folds', update)
-    return () => {
-      window.removeEventListener('storage', update)
-      window.removeEventListener('study-tree-folds', update)
-    }
-  }, [])
   if (!elected) return null
   const turns = study.nodes.filter((item) => item.treeId === node.treeId)
   const children = new Map<string | null, typeof turns>()
@@ -69,26 +54,17 @@ export function WorkspaceTree({
     children.set(turn.parentId, rows)
   }
   for (const rows of children.values()) rows.sort((a, b) => a.created - b.created)
-  const ancestors = new Set(
-    pathTo(turns, study.active)
-      .slice(0, -1)
-      .map((item) => item.id),
-  )
-  function toggle(id) {
-    const next = { ...folds, [id]: !(folds[id] && !ancestors.has(id)) }
-    // A selected descendant stays accessible. Explicit collapse selects its parent.
-    if (ancestors.has(id)) {
-      next[id] = true
-      study.open(id)
-    }
-    localStorage.setItem('dsh-study-tree:folds', JSON.stringify(next))
-    setFolds(next)
-    window.dispatchEvent(new Event('study-tree-folds'))
+  const selectedPath = new Set(pathTo(turns, study.active).map(turn => turn.id))
+  function toggle(id, collapse) {
+    if (collapse && children.get(id)?.some(child => selectedPath.has(child.id))) study.open(id)
+    setBranchFolds([[id, 'both']], collapse, children)
   }
   function render(parent, depth) {
     return (children.get(parent) || []).map((turn) => {
-      const hasChildren = children.has(turn.id)
-      const expanded = hasChildren && (!folds[turn.id] || ancestors.has(turn.id))
+      if (parent && isFolded(folds, selectedPath, turn)) return null
+      const branches = children.get(turn.id)
+      const hasChildren = !!branches?.length
+      const expanded = hasChildren && branches.some(child => !isFolded(folds, selectedPath, child))
       return (
         <React.Fragment key={turn.id}>
           <div
@@ -107,7 +83,7 @@ export function WorkspaceTree({
               className="st-tree-toggle"
               aria-label={(expanded ? '折叠：' : '展开：') + turn.question}
               disabled={!hasChildren}
-              onClick={() => toggle(turn.id)}
+              onClick={() => toggle(turn.id, expanded)}
             >
               {hasChildren ? (
                 <ChevronRight size={13} style={{ rotate: expanded ? '90deg' : undefined }} />
@@ -115,6 +91,9 @@ export function WorkspaceTree({
                 <GitBranch size={12} />
               )}
             </button>
+            {turn.mark && nodeMarks[turn.mark] && <span className="st-tree-mark"
+              title={'节点颜色 · ' + nodeMarks[turn.mark].label}
+              style={{ backgroundColor: nodeMarks[turn.mark].color }} />}
             <button
               className="st-tree-title"
               title={turn.question}

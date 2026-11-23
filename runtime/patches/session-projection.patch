@@ -1,0 +1,229 @@
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -19,6 +19,7 @@
+ 
+ import { Context, FiberState, Service } from '@deepseek-ai/cordis'
+ import type { ZodType } from 'zod'
++import { activePathEvents } from 'dsh-study-tree/branch-history'
+ import { SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
+ import type {
+   Session,
+@@ -81,6 +82,8 @@
+  * `state` MUST be plain JSON (the persisted-cache precondition).
+  */
+ export interface ProjectionDefinition<K extends string, S> {
++  /** Fold model context on the active path. Accounting and lifecycle folds use the full journal. */
++  history?: 'active-path' | 'journal'
+   /** The projection key this unit owns. */
+   key: K
+   /** Validates persisted state before it seeds a fold. */
+@@ -212,6 +215,7 @@
+ 
+ /** Type-erased unit view the drive machinery works with (the registration contract already proved the typed form). */
+ interface ErasedDefinition {
++  history: 'active-path' | 'journal'
+   key: string
+   stateSchema: { parse(value: unknown): unknown }
+   init(header: SessionHeader, inheritedEventCount: SessionLogOffset): unknown
+@@ -223,6 +227,47 @@
+     summary: boolean
+   } | undefined
+   stateVersion: number
++}
++
++/** Fold the original entries of one branch in their model-history order. */
++function foldHistory(
++  def: ErasedDefinition,
++  events: readonly SessionEvent[],
++  header: SessionHeader,
++  inherited: SessionLogOffset,
++): unknown {
++  let state = def.init(header, inherited)
++  for (const event of events) state = def.apply(state, event)
++  return state
++}
++
++/** Refresh only context projections when a live turn changes its ancestry. */
++function foldLiveEvent(def: ErasedDefinition, state: unknown, event: SessionEvent, session: Session): unknown {
++  if (def.history === 'active-path' && session.pathSwitchedAt?.(event.seq)) {
++    return foldHistory(def, session.activePathEvents(event.seq), session.header, session.inheritedEventCount)
++  }
++  return def.apply(state, event)
++}
++
++/**
++ * Find the latest possible change of ancestry in a stored slice. A normal child of
++ * the latest completed turn can always reuse the checkpoint. A suffix may omit
++ * the earlier boundary, in which case only the live index can prove continuity.
++ */
++function lastAncestryChange(events: readonly SessionEvent[], session?: Session): SessionSeq | undefined {
++  if (session !== undefined) {
++    if (!session.pathGeneration) return
++    return events.findLast(event => session.pathSwitchedAt?.(event.seq))?.seq
++  }
++  let lastEnd: SessionSeq | undefined
++  let change: SessionSeq | undefined
++  for (const event of events) {
++    if (event.type === 'turn/end') lastEnd = event.seq
++    if (event.type === 'turn/start' && typeof event.data.parentSeq === 'number' && event.data.parentSeq !== lastEnd) {
++      change = event.seq
++    }
++  }
++  return change
+ }
+ 
+ /** Per-session per-unit watermark and fixed live-drive view buffer. */
+@@ -387,6 +432,7 @@
+     } | undefined
+     const erased: ErasedDefinition = {
+       key: definition.key,
++      history: definition.history ?? (definition.key === 'goal' ? 'active-path' : 'journal'),
+       stateSchema: definition.stateSchema,
+       init: (header, inheritedEventCount) => definition.init(header, inheritedEventCount),
+       apply: (state, event) => definition.apply(state as S, event),
+@@ -413,6 +459,9 @@
+       } else {
+         if (existing.def.stateVersion !== erased.stateVersion) {
+           throw new Error(`session projection key ${JSON.stringify(key)} is already registered at stateVersion ${String(existing.def.stateVersion)}; refusing to share it with stateVersion ${String(erased.stateVersion)}`)
++        }
++        if (existing.def.history !== erased.history) {
++          throw new Error(`session projection key ${JSON.stringify(key)} is already registered with history=${existing.def.history}`)
+         }
+         if (existing.def.wire?.summary !== erased.wire?.summary) {
+           throw new Error(`session projection key ${JSON.stringify(key)} is already registered with summary=${String(existing.def.wire?.summary)}; refusing to share it with summary=${String(erased.wire?.summary)}`)
+@@ -716,10 +765,24 @@
+     inheritedEventCount: SessionLogOffset,
+   ):
+   { snapshot: ProjectionSnapshot; checkpoint: ProjectionCheckpoint } {
++    return this.foldStored(checkpoint, events, baseSeq, header, inheritedEventCount)
++  }
++
++  /** Fold a stored cut, using the live ancestry index when hydrating a suffix. */
++  private foldStored(
++    checkpoint: ProjectionCheckpoint,
++    events: readonly SessionEvent[],
++    baseSeq: SessionLogOffset,
++    header: SessionHeader,
++    inheritedEventCount: SessionLogOffset,
++    session?: Session,
++  ): { snapshot: ProjectionSnapshot; checkpoint: ProjectionCheckpoint } {
+     const endSeq: SessionSeqCursor = events.at(-1)?.seq ?? cursorBefore(baseSeq)
+     const beforeBase = cursorBefore(baseSeq)
+     const values: Record<string, unknown> = {}
+     const refreshed: ProjectionCheckpoint = {}
++    const change = lastAncestryChange(events, session)
++    let path: readonly SessionEvent[] | undefined
+     for (const registration of this.registrations.values()) {
+       if (registration.refs === 0) continue
+       const def = registration.def
+@@ -739,13 +802,19 @@
+         : def.init(header, inheritedEventCount)
+       const from = usable ? row.seq : beforeBase
+       const startIndex = from - baseSeq + 1
+-      for (let index = startIndex; index < events.length; index++) {
+-        const event = events[index]
+-        const expectedSeq = SessionSeq(baseSeq + index)
+-        if (event === undefined || event.seq !== expectedSeq) {
+-          throw new Error(`session projection ${JSON.stringify(def.key)} cannot restore across missing seq ${String(expectedSeq)}`)
++      if (def.history === 'active-path' && change !== undefined && change > from) {
++        if (session === undefined && baseSeq !== 0) throw new Error('path projection requires full history; re-read from seq 0')
++        path ??= session === undefined || endSeq === -1 ? activePathEvents(events) : (session.activePathEvents?.(endSeq) ?? session.snapshotEvents(SessionLogOffset(0), SessionLogOffset(endSeq + 1)))
++        state = foldHistory(def, path, header, inheritedEventCount)
++      } else {
++        for (let index = startIndex; index < events.length; index++) {
++          const event = events[index]
++          const expectedSeq = SessionSeq(baseSeq + index)
++          if (event === undefined || event.seq !== expectedSeq) {
++            throw new Error(`session projection ${JSON.stringify(def.key)} cannot restore across missing seq ${String(expectedSeq)}`)
++          }
++          state = def.apply(state, event)
+         }
+-        state = def.apply(state, event)
+       }
+       if (def.wire !== undefined) values[def.key] = def.wire.viewSchema.parse(def.wire.view(state))
+       refreshed[def.key] = { ver: def.stateVersion, seq: endSeq, val: state }
+@@ -792,13 +861,7 @@
+       }
+       return { asOfSeq: endSeq, values }
+     }
+-    const restored = this.restore(
+-      checkpoint,
+-      events,
+-      baseSeq,
+-      session.header,
+-      session.inheritedEventCount,
+-    )
++    const restored = this.foldStored(checkpoint, events, baseSeq, session.header, session.inheritedEventCount, session)
+     for (const registration of this.registrations.values()) {
+       if (registration.refs === 0) continue
+       const row = restored.checkpoint[registration.def.key]
+@@ -826,26 +889,23 @@
+   /** Fold one unit from init over `events`, producing a cell watermarked at the last folded event. */
+   private buildCell(
+     def: ErasedDefinition,
+-    header: SessionHeader,
+-    inheritedEventCount: SessionLogOffset,
+-    events: readonly SessionEvent[],
++    session: Session,
++    before: SessionLogOffset = session.seq,
+   ): UnitCell {
+-    let state = def.init(header, inheritedEventCount)
+-    for (const event of events) state = def.apply(state, event)
+-    return { state, observedSeq: (events.at(-1)?.seq ?? -1), views: [undefined, undefined] }
++    const observedSeq = cursorBefore(before)
++    const events = def.history === 'active-path'
++      ? (observedSeq === -1 ? [] : (session.activePathEvents?.(observedSeq) ?? session.snapshotEvents(SessionLogOffset(0), before)))
++      // oxlint-disable-next-line typescript/no-deprecated -- Existing journal projections fold this exact raw cut.
++      : session.snapshotEvents(SessionLogOffset(0), before)
++    const state = foldHistory(def, events, session.header, session.inheritedEventCount)
++    return { state, observedSeq, views: [undefined, undefined] }
+   }
+ 
+   /** Read (or lazily build, folding the full in-memory log) one unit's cell. */
+   private cellFor(registration: Registration, session: Session): UnitCell {
+     let cell = registration.cells.get(session)
+     if (cell === undefined) {
+-      cell = this.buildCell(
+-        registration.def,
+-        session.header,
+-        session.inheritedEventCount,
+-        // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
+-        session.snapshotEvents(),
+-      )
++      cell = this.buildCell(registration.def, session)
+       registration.cells.set(session, cell)
+     } else {
+       this.advanceCell(registration.def, cell, session, cursorBefore(session.seq))
+@@ -868,7 +928,7 @@
+       if (event === undefined || event.seq !== seq) {
+         throw new Error(`session projection ${JSON.stringify(def.key)} cannot advance across missing seq ${String(seq)}`)
+       }
+-      const next = def.apply(cell.state, event)
++      const next = foldLiveEvent(def, cell.state, event, session)
+       if (!Object.is(next, cell.state)) {
+         cell.views[0] = cell.views[1]
+         cell.views[1] = undefined
+@@ -895,13 +955,7 @@
+         if (cell === undefined) {
+           // Late build mid-stream: fold history before this event (seq = log
+           // index, so the prefix slice is exact), then take the normal gate.
+-          cell = this.buildCell(
+-            registration.def,
+-            session.header,
+-            session.inheritedEventCount,
+-            // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
+-            session.snapshotEvents(SessionLogOffset(0), SessionLogOffset(event.seq)),
+-          )
++          cell = this.buildCell(registration.def, session, SessionLogOffset(event.seq))
+           registration.cells.set(session, cell)
+         } else {
+           this.advanceCell(
+@@ -912,7 +966,7 @@
+           )
+         }
+         const previousState = cell.state
+-        const next = registration.def.apply(previousState, event)
++        const next = foldLiveEvent(registration.def, previousState, event, session)
+         const changed = !Object.is(next, previousState)
+         cell.state = next
+         cell.observedSeq = event.seq

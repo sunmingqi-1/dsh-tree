@@ -10,7 +10,7 @@ const CELL = 640
 const right = (r: Rect) => r.x + r.width
 const bottom = (r: Rect) => r.y + r.height
 const overlap = (a: number, endA: number, b: number, endB: number) => Math.min(endA, endB) - Math.max(a, b) > EPS
-const conflicts = (a: Rect, b: Rect) =>
+export const conflicts = (a: Rect, b: Rect) =>
   a.x < right(b) + NODE_GAP - EPS && right(a) + NODE_GAP > b.x + EPS &&
   a.y < bottom(b) + NODE_GAP - EPS && bottom(a) + NODE_GAP > b.y + EPS
 
@@ -35,7 +35,7 @@ function swept(start: Rect, end: Rect, target: Rect) {
 
 // Broad phase: a pointer movement only needs nearby/swept rectangles, not
 // every pair in the tree. Settled rectangles stay fixed during one solve.
-class Neighbours {
+export class Neighbours {
   private cells = new Map<string, string[]>()
   private all: string[] = []
   private overflow: string[] = []
@@ -163,4 +163,36 @@ export function adaptLayout(base: Rects, activeId: string, next: Rect, liveSizes
     settled++
   }
   return Object.fromEntries(Object.entries(rects).map(([id, r]) => [id, { x: r.x, y: r.y }]))
+}
+
+// Cache the stationary geometry for one pointer gesture. For short pushes solve
+// only the swept neighbours. Long chains and shrink-to-follow use the full solver.
+export function gestureLayout(base: Rects, id: string) {
+  const index = new Neighbours()
+  for (const [key, rect] of Object.entries(base)) index.add(key, rect, rect)
+  return (next: Rect, changedSizes?: Sizes): Positions => {
+    const start = base[id]
+    if (!start || changedSizes || next.width < start.width || next.height < start.height)
+      return adaptLayout(base, id, next, changedSizes)
+    const nearby = { [id]: start }
+    let positions: Positions = { [id]: { x: next.x, y: next.y } }
+    for (let pass = 0; pass < 4; pass++) {
+      let added = false
+      for (const [source, point] of Object.entries(positions)) {
+        const old = base[source]
+        if (source !== id && point.x === old.x && point.y === old.y) continue
+        const end = source === id ? next : { ...old, ...point }
+        const x = Math.min(old.x, end.x), y = Math.min(old.y, end.y)
+        const area = { x, y, width: Math.max(right(old), right(end)) - x, height: Math.max(bottom(old), bottom(end)) - y }
+        for (const other of index.query(area)) {
+          if (nearby[other] || !conflicts(area, base[other])) continue
+          nearby[other] = base[other]
+          added = true
+        }
+      }
+      if (!added) return positions
+      positions = adaptLayout(nearby, id, next)
+    }
+    return adaptLayout(base, id, next)
+  }
 }

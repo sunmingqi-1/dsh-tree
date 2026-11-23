@@ -33,7 +33,7 @@ function mirrorActiveControl(ctx, source: string, exclude, transform, seat) {
       if (exclude?.(entry) || registrations.has(entry)) continue
       const stops: (() => void)[] = []
       const session = source === 'conversation.composer.bar' && seat === controlSeat
-        ? ctx.slots.entries('conversation.session')[0] : null
+        ? ctx.slots.entries('conversation.session').find(entry => entry.store && entry.inject) : null
       const children = Object.fromEntries(
         Object.entries(entry.children || {}).map(([name, spec]) => [seat(name), spec]),
       )

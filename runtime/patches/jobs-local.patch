@@ -1,0 +1,26 @@
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -82,6 +82,7 @@
+   outputLimitBytes: number | undefined
+   /** Exact lifecycle owner; session-id authorization is derived from it. */
+   owner: Agent | undefined
++  originTurn: number | undefined
+   cancel: (reason?: string) => void
+   status: JobStatus
+   ring: OutputRing
+@@ -260,6 +261,7 @@
+       label: spec.label,
+       outputLimitBytes: spec.outputLimitBytes,
+       owner,
++      originTurn: owner?.session.isTree ? (this.selfCtx.get('agents')?.turnBoundaryOf(owner.session).lastTurn || undefined) : undefined,
+       cancel: hooks.cancel.bind(hooks),
+       status: 'running',
+       ring,
+@@ -433,6 +435,7 @@
+       kind: job.kind,
+       label: job.label,
+       ...owner !== undefined ? { owner } : {},
++      ...job.originTurn !== undefined ? { originTurn: job.originTurn } : {},
+       ...job.outputLimitBytes !== undefined ? { outputLimitBytes: job.outputLimitBytes } : {},
+       status: job.status,
+       ...job.state.progress !== undefined ? { progress: job.state.progress } : {},

@@ -1,6 +1,8 @@
-import { readTurn, isUserPrompt, type Turn, type Anchor } from './tree'
+import { TreeLog, quoteText } from '../treeLog.js'
+import { isQuoteBranch, readTurn, type Turn, type Anchor } from './tree'
 import { NativeDrafts } from './nativeDrafts'
 import { NativeTurns, NativeInteractions } from './nativeState'
+import { bindBranchInput, sendBranchPrompt } from './branchPrompt'
 export class Study {
   composers = new NativeDrafts(this)
   turns = new NativeTurns()
@@ -37,6 +39,13 @@ export class Study {
   turnNumbers = new Map<string, number>()
   nodes: Turn[] = []
   answers = new Map<string, string>()
+  private turnAnswers = new Map<string, Map<number, string>>()
+  answerFor(node: Turn) {
+    const parts = this.turnAnswers.get(node.id)
+    return parts && node.activeTurns
+      ? node.activeTurns.map(turn => parts.get(turn)).filter(Boolean).join('\n\n')
+      : this.answers.get(node.id)
+  }
   issues = new Map<string, string>()
   listeners = new Set<() => void>()
   watches = new Map<string, () => void>()
@@ -53,6 +62,7 @@ export class Study {
   }
   startNew(workspaceId = this.workspaceId) {
     this.enabled = false
+    this.stopFollowing()
     this.creating = true
     this.pendingStop()
     this.pendingSession = null
@@ -60,81 +70,106 @@ export class Study {
     this.ctx.uiWorkspace.startSession(workspaceId)
     this.emit()
   }
+  rootReady = false
+  private followed: string | null = null
+  private stopFollowing = () => {}
+  private sent = new Map<string, { active: string | null; revision: number; root: boolean; requestId: string }>()
+  private selectionRevision = 0
+  setActive(id: string | null) {
+    if (this.active !== id) this.selectionRevision++
+    this.active = id
+  }
+  onSubmission(id: string, root = false) {
+    const active = this.active, revision = this.selectionRevision
+    return (requestId: string) => { this.sent.set(id, { active, revision, root, requestId }) }
+  }
+  forgetSubmission(id: string) { this.sent.delete(id) }
   armRoot(sessionId) {
     if (this.pendingSession === sessionId) return
     this.pendingStop()
-    this.pendingSession = sessionId
+    this.rootReady = false
     this.creating = true
-    const reference = this.ctx.sessions.retain(sessionId, { source: 'studyTree' })
-    let off = () => {}
-    let stopped = false
-    let saving = false
-    const id = crypto.randomUUID()
+    this.pendingSession = sessionId
+    this.follow(sessionId)
+    const ref = this.ctx.sessions.retain(sessionId, { source: 'studyTree.root' })
+    let alive = true, unbind = () => {}
     this.pendingStop = () => {
-      stopped = true
-      off()
-      reference.release()
+      if (!alive) return
+      alive = false
+      this.rootReady = false
       this.pendingSession = null
+      unbind()
+      ref.release()
     }
-    reference.ready
-      .then((binding) => {
-        if (stopped) return
-        const read = async () => {
-          if (saving || stopped) return
-          const message = binding.eventSource
-            .getSnapshot()
-            .entries.find(
-              ({ event }) => isUserPrompt(event),
-            )?.event
-          if (!message) return
-          saving = true
-          try {
-            const question =
-              message.data.content
-                .filter((part) => part.type === 'text')
-                .map((part) => part.text)
-                .join('\n') || '阅读附件'
-            const node =
-              this.nodes.find((item) => item.id === id) ||
-              (await this.save({
-                id,
-                treeId: id,
-                parentId: null,
-                question,
-                anchor: null,
-                created: Date.now(),
-                sessionId,
-                requestId: message.data.source.rpcId,
-                endSeq: null,
-                status: 'sending',
-                error: null,
-                revision: 0,
-              }))
-            this.watch(node)
-            if (!stopped) {
-              this.creating = false
-              this.pendingStop()
-              this.open(node.id)
-            }
-          } catch (error) {
-            saving = false
-            this.error = error.message
-            await this.refresh().catch(() => {})
-            if (!stopped && this.nodes.some((item) => item.id === id)) void read()
-            this.emit()
-          }
-        }
-        off = binding.eventSource.subscribe(() => {
-          void read()
-        })
-        void read()
+    void ref.ready.then(binding => {
+      if (!alive) return
+      unbind = bindBranchInput(this, binding, sessionId, () => {
+        const id = crypto.randomUUID()
+        return { parentSeq: null, metadata: { studyTree: { id } }, onRequest: this.onSubmission(id, true) }
       })
-      .catch((error) => {
-        this.error = error.message
-        this.pendingStop()
-        this.emit()
-      })
+      this.rootReady = true
+      this.emit()
+    }).catch(error => { if (alive) { this.error = error.message; this.emit() } })
     this.emit()
+  }
+  /** A single resident subscription learns about submissions from every window. */
+  follow(sessionId) {
+    if (this.followed === sessionId) return
+    this.stopFollowing()
+    this.followed = sessionId
+    const ref = this.ctx.sessions.retain(sessionId, { source: 'studyTree.log' })
+    let alive = true, off = () => {}
+    this.stopFollowing = () => {
+      if (!alive) return
+      alive = false
+      off()
+      ref.release()
+      this.followed = null
+    }
+    void ref.ready.then(async binding => {
+      await binding.session.loadThrough(0)
+      if (!alive) return
+      const log = new TreeLog(sessionId)
+      let revision = -1
+      const read = () => {
+        const window = binding.eventSource.getSnapshot()
+        const delta = revision >= 0 && revision + 1 === window.revision ? window.change : null
+        revision = window.revision
+        const entries = delta?.kind === 'append' ? delta.entries : delta?.kind === 'settle-assistant'
+          ? (delta.entry ? [delta.entry] : []) : window.entries
+        let first = entries.length
+        while (first && entries[first - 1].event.seq >= log.nextSeq) first--
+        const changes = new Map()
+        for (let i = first; i < entries.length; i++) {
+          if (entries[i].type === 'transient') continue
+          const row = log.append(entries[i].event)
+          if (row) changes.set(row.id, row)
+        }
+        if (!changes.size) return
+        const merged = new Map(this.nodes.map(row => [row.id, row]))
+        for (const row of changes.values()) {
+          const old = merged.get(row.id)
+          if (row.continuations?.length && (old?.endSeq !== row.endSeq || old?.activeTurns?.at(-1) !== row.activeTurns?.at(-1)))
+            this.answers.delete(row.id)
+          merged.set(row.id, { ...old, ...row, revision: old?.revision || 0 })
+          this.turnNumbers.set(row.id, row.turn)
+        }
+        this.nodes = [...merged.values()]
+        for (const row of changes.values()) {
+          const intent = this.sent.get(row.id)
+          if (!intent || row.requestId !== intent.requestId) continue
+          this.sent.delete(row.id)
+          if (intent.root && this.creating && this.pendingSession === sessionId) {
+            this.creating = false
+            this.pendingStop()
+            this.open(row.id)
+          } else if (!intent.root && this.enabled && intent.active === this.active && intent.revision === this.selectionRevision) this.open(row.id)
+        }
+        this.emit()
+      }
+      off = binding.eventSource.subscribe(read)
+      read()
+    }).catch(error => { if (alive) { this.error = error.message; this.emit() } })
   }
   showSession(sessionId) {
     if (this.ctx.uiSession.adapter.current.getSnapshot().key === sessionId) {
@@ -155,7 +190,8 @@ export class Study {
     const root = this.nodes.find((item) => item.id === node.treeId)
     this.workspaceId = this.workspaceFor(root?.sessionId)
     this.navigation = { id, revision: (this.navigation?.revision || 0) + 1 }
-    this.active = id
+    this.setActive(id)
+    if (node.logged && node.sessionId) this.follow(node.sessionId)
     this.enabled = true
     if (node.sessionId) this.showSession(node.sessionId)
     this.emit()
@@ -181,13 +217,18 @@ export class Study {
     const [rows] = await Promise.all([this.call('list'), this.ctx.sessions.refresh()])
     const revisions = new Map(this.nodes.map((n) => [n.id, n]))
     for (const row of rows) {
-      if ((revisions.get(row.id)?.revision ?? -1) < row.revision) revisions.set(row.id, row)
+      const previous = revisions.get(row.id)
+      if (row.logged) {
+        this.turnNumbers.set(row.id, row.turn)
+        const turn = previous?.logged && (previous.boundarySeq ?? -1) > (row.boundarySeq ?? -1) ? previous : row
+        const annotation = previous?.logged && previous.revision > row.revision ? previous : row
+        revisions.set(row.id, { ...turn, revision: annotation.revision, title: annotation.title, mark: annotation.mark })
+      } else if ((previous?.revision ?? -1) < row.revision) revisions.set(row.id, row)
     }
     this.nodes = Array.from(revisions.values())
     this.issues.clear()
     this.loaded = true
     this.error = ''
-    await this.composers.recover()
     this.emit()
   }
   merge(node: Turn) {
@@ -198,7 +239,8 @@ export class Study {
   }
   async save(n: Turn) {
     const saved = await this.call('save', { request: n })
-    this.merge(saved)
+    const old = this.nodes.find(n => n.id === saved.id)
+    this.merge(old?.logged ? { ...old, title: saved.title, mark: saved.mark, revision: saved.revision } : saved)
     this.emit()
     return saved as Turn
   }
@@ -206,72 +248,28 @@ export class Study {
     parent: Turn | null,
     question: string,
     anchor: Anchor | null,
-    select,
     versionOf?: string,
   ) {
+    if (!parent && versionOf && !this.nodes.find(n => n.id === versionOf)?.logged) throw new Error('旧版学习树仅支持阅读。请新建学习主题继续。')
     if (parent && (parent.endSeq == null || !parent.sessionId))
       throw new Error('请等待来源回答结束')
-    const id = crypto.randomUUID()
-    let n = await this.save({
-      id,
-      treeId: parent?.treeId || id,
-      parentId: parent?.id || null,
-      question,
-      anchor,
-      versionOf,
-      created: Date.now(),
-      sessionId: null,
-      requestId: null,
-      endSeq: null,
-      status: 'preparing',
-      error: null,
-      revision: 0,
+    if (parent && !parent.logged) throw new Error('旧版学习树仅支持阅读。请新建学习主题继续。')
+    if (parent) parent = this.nodes.find(n => n.id === parent.id) ?? parent
+    // Rewriting the root starts another independent tree with empty history.
+    const sessionId = parent?.sessionId || await this.ctx.sessions.create({ workspaceId: this.workspaceId })
+    this.follow(sessionId)
+    await this.ctx.sessions.using(sessionId, { source: 'studyTree' }, async ref => {
+      const binding = await ref.ready
+      const id = crypto.randomUUID()
+      const text = anchor ? quoteText(anchor.text) + '\n\n' + question : question
+      const handle = binding.session.beginSubmission({ text, mode: 'queue', attachments: [] })
+      const original = versionOf && this.nodes.find(n => n.id === versionOf)
+      const branchKind = (original ? isQuoteBranch(original) : !!anchor) ? 'quote' : 'card'
+      const meta = { studyTree: { id, ...(parent && { branchKind }), ...(versionOf && { versionOf }), ...(anchor && { anchor }) } }
+      await sendBranchPrompt(this, sessionId, binding.session, handle, {
+        parentSeq: parent?.boundarySeq ?? parent?.endSeq ?? null, metadata: meta, onRequest: this.onSubmission(id),
+      }, [{ type: 'text', text }])
     })
-    select(n)
-    let sending = false
-    let handle
-    try {
-      const sessionId = parent
-        ? await this.ctx.sessions.fork({
-            sessionId: parent.sessionId,
-            atSeq: parent.endSeq,
-          })
-        : await this.ctx.sessions.create({ workspaceId: this.workspaceId })
-      n = await this.save({ ...n, sessionId })
-      await this.ctx.sessions.using(sessionId, { source: 'studyTree' }, async (ref) => {
-        const { session } = await ref.ready
-        const text = anchor ? '原文引用：\n' + anchor.text + '\n\n' + question : question
-        handle = session.beginSubmission({ text, mode: 'queue', attachments: [] })
-        n = await this.save({ ...n, requestId: handle.requestId, status: 'sending' })
-        this.watch(n)
-        sending = true
-        const result = await session.prompt(
-          [{ type: 'text', text }],
-          'queue',
-          undefined,
-          handle.requestId,
-        )
-        if (!result.ok) {
-          sending = false
-          throw new Error(result.error.message)
-        }
-      })
-    } catch (e) {
-      if (!sending) handle?.abandon()
-      const latest = this.nodes.find((item) => item.id === id) || n
-      const createdSession =
-        e.rpcError?.code === 'session/workspace-attach-failed'
-          ? e.rpcError.details?.sessionId
-          : undefined
-      if (latest.endSeq === null)
-        await this.save({
-          ...latest,
-          sessionId: latest.sessionId ?? createdSession ?? null,
-          status: sending ? 'sending' : 'failed',
-          error: String(e.message || e),
-        })
-      throw e
-    }
   }
   observe(turns: Turn[], path: Turn[]) {
     const wanted = new Set(turns.map((n) => n.id))
@@ -343,7 +341,7 @@ export class Study {
           if (stopped || finishing) return
           const entries = binding.eventSource.getSnapshot().entries
           let turnNumber: number | undefined
-          for (const { event } of entries) {
+          if (!n.logged) for (const { event } of entries) {
             if (event.type === 'turn/start') turnNumber = event.data.turn
             if (event.type === 'user/message' && event.data.source?.rpcId === n.requestId) {
               if (turnNumber !== undefined && this.turnNumbers.get(n.id) !== turnNumber) {
@@ -353,8 +351,20 @@ export class Study {
               break
             }
           }
-          const result = readTurn(entries, n.requestId)
-          if (n.endSeq !== null && result.endSeq === null) {
+          const current = this.nodes.find(node => node.id === n.id) || n
+          const primary = readTurn(entries, n.requestId, n.startSeq)
+          let result = primary
+          if (current.continuations?.length) {
+            const parts = new Map([[current.turn, primary.answer]])
+            for (const part of current.continuations) {
+              const tail = readTurn(entries, undefined, part.startSeq)
+              parts.set(part.turn, tail.answer)
+              if (part.turn === current.activeTurns?.at(-1)) result = tail
+            }
+            this.turnAnswers.set(n.id, parts)
+            result = { ...result, answer: this.answerFor(current) || '' }
+          }
+          if (current.endSeq !== null && result.endSeq === null) {
             fail(new Error('未能读取此节点的完整问答，请刷新后重试'))
             return
           }
@@ -369,7 +379,7 @@ export class Study {
                 : result.reason.kind === 'aborted'
                   ? 'stopped'
                   : 'failed'
-            if (n.endSeq === result.endSeq) stop()
+            if (n.logged || n.endSeq === result.endSeq) stop()
             else
               void this.save({
                 ...n,
@@ -406,6 +416,7 @@ export class Study {
   }
   dispose() {
     this.closing = true
+    this.stopFollowing()
     this.composers.dispose()
     this.pendingStop()
     for (const stop of [...this.watches.values()]) stop()

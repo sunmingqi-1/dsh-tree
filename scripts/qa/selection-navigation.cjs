@@ -88,7 +88,7 @@ const { chromium } = require('playwright-core')
     await page.getByRole('button', { name: '在分支中提问', exact: true }).click()
     await page.locator('.st-quote-popover [data-composer-input][contenteditable=true]').waitFor()
     await page.keyboard.press('Escape')
-    // The initial explicit fork can publish a change to the native catalog.
+    // Wait for the native quote editor to mount in its new seat.
     await page.evaluate(() => { selectionProbe.observer.takeRecords(); selectionProbe.changes = 0 })
     for (let i = 0; i < 3; i++) {
       await select(i)
@@ -134,13 +134,13 @@ const { chromium } = require('playwright-core')
       }
     })
     assert.equal(after.changes, 0, 'selection must not rebuild sidebar rows')
-    assert.equal(after.drafts, before.drafts + 1, 'reopening the explicit fork reuses its unused Session')
+    assert.equal(after.drafts, before.drafts, 'opening and reopening a quote reuses the tree Session')
     assert.deepEqual(after.rows, before.rows)
     assert.equal(after.preparing, 0, 'no visible gray preparation placeholder')
     assert.equal(after.incomplete, 0, 'popup first appears with its complete native editor')
     assert.deepEqual(errors, [])
     console.log(
-      'selection and adding a quote create no fork; explicit branch editor creates one reusable fork; complete popup and stable sidebar; PASS',
+      'selection and adding a quote create no fork; explicit branch editor reuses the tree Session; complete popup and stable sidebar; PASS',
     )
   } finally {
     await browser.close()

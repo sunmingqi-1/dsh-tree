@@ -1,7 +1,8 @@
 import React from 'react'
 import { MiniMap, useReactFlow } from '@xyflow/react'
+import { nodeMarks } from '../nodeMarks.js'
 
-const nodeColor = node => node.selected ? 'var(--st-path)' : 'var(--st-edge)'
+const nodeColor = node => nodeMarks[node.data.turn?.mark]?.color || (node.selected ? 'var(--st-path)' : 'var(--st-edge)')
 
 export const CanvasMiniMap = React.memo(function CanvasMiniMap() {
   const flow = useReactFlow()

@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
 import { fileURLToPath } from 'node:url'
+import { rc5Shell } from './rc5-composer.mjs'
 
 const output = await build({ entryPoints: [fileURLToPath(new URL('../src/client/nativeDrafts.ts', import.meta.url))], bundle: true, platform: 'node', format: 'esm', write: false })
 const { NativeDrafts, nativeQuestion, quoteText } = await import('data:text/javascript;base64,' + Buffer.from(output.outputFiles[0].text).toString('base64'))
@@ -11,8 +12,9 @@ globalThis.localStorage = { getItem: key => storage.get(key) || null, setItem: (
 test.beforeEach(() => storage.clear())
 
 function fixture() {
-  const parent = { id: 'root', treeId: 'root', sessionId: 'source', endSeq: 3 }
+  const parent = { logged: true, id: 'root', treeId: 'root', sessionId: 'source', endSeq: 3 }
   const bindings = new Map(), forks = [], opened = [], watched = []
+  const prepared = [], prompts = [], abandoned = []
   let held = 0
   function binding(id, entries = []) {
     const listeners = new Set(), inputListeners = new Set()
@@ -25,14 +27,23 @@ function fixture() {
       addAttachments: ids => { state.attachmentIds = [...state.attachmentIds, ...ids] },
       removeAttachment: id => { state.attachmentIds = state.attachmentIds.filter(item => item !== id) },
     }
-    const result = { ctx: { id }, input, session: { loadThrough: async () => {}, getSnapshot: () => ({ pendingSubmissions: [] }) }, eventSource: {
+    const conversation = rc5Shell(input, state, () => { for (const fn of inputListeners) fn() })
+    const result = { ctx: { id }, input, conversation, session: {
+      loadThrough: async () => {}, getSnapshot: () => ({ pendingSubmissions: [] }),
+      beginSubmission() {
+        const requestId = crypto.randomUUID()
+        return { requestId, abandon() { abandoned.push(requestId) } }
+      },
+      async prompt(...args) { prompts.push(args); return { ok: true } },
+    }, eventSource: {
       getSnapshot: () => ({ entries }), subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn) },
     }, add(event) { entries.push({ event }); for (const fn of listeners) fn() }, notify() { for (const fn of listeners) fn() } }
     bindings.set(id, result); return result
   }
   binding('source', [{ event: { type: 'user/message', seq: 1 } }, { event: { type: 'turn/end', seq: 3 } }])
   const retain = id => { held++; let released = false; return { sessionId: id, ready: Promise.resolve(bindings.get(id)), release() { assert.equal(released, false); released = true; held-- } } }
-  const study = { nodes: [], active: parent.id, emit() {}, watch: n => watched.push(n), open: id => opened.push(id), failSave: false,
+  const study = { nodes: [], active: parent.id, submitted: [], onSubmission(id) { return () => this.submitted.push(id) }, emit() {}, watch: n => watched.push(n), open: id => opened.push(id), failSave: false,
+    async call(method, { request }) { assert.equal(method, 'preparePrompt'); prepared.push(request) }, forgetSubmission() {},
     async save(node) { await Promise.resolve(); if (study.failSave) throw Error('offline'); study.nodes.push(node); return node },
     ctx: {
       sessions: {
@@ -40,7 +51,7 @@ function fixture() {
         retain,
         async using(id, _, fn) { const ref = retain(id); try { return await fn(ref) } finally { ref.release() } },
         async fork(options) { forks.push(options); const id = 'draft-' + forks.length; binding(id, bindings.get(options.sessionId).eventSource.getSnapshot().entries.filter(row => row.event.seq <= options.atSeq)); return id },
-      }, conversation: { input: { for: ctx => bindings.get(ctx.id).input } },
+      }, conversation: bindings.get('source').conversation,
     },
   }
   const drafts = new NativeDrafts(study)
@@ -50,164 +61,183 @@ function fixture() {
     const stop = drafts.mount(request, ref => { reference = ref }, error => { throw Error(error) })
     return { stop, request, reference: () => reference, binding: () => bindings.get(reference.sessionId) }
   }
-  return { study, drafts, parent, bindings, forks, opened, watched, mount, held: () => held }
+  return { study, drafts, parent, bindings, forks, opened, watched, prepared, prompts, abandoned, mount, held: () => held }
 }
 
-test('末尾普通追问复用原会话，连续两轮仍在同一 Session', async () => {
-  const f = fixture(), first = f.mount(); await tick()
-  assert.deepEqual(f.forks, [])
-  assert.equal(first.reference().sessionId, 'source')
-  const source = first.binding()
-  source.add({ type: 'user/message', seq: 4, data: { source: { rpcId: 'second' }, content: [{ type: 'text', text: '第二轮' }] } })
-  await tick()
-  source.add({ type: 'turn/end', seq: 7 })
-  f.study.nodes[0].endSeq = 7
-  const reopened = f.mount(); await tick()
-  assert.equal(reopened.reference(), null, '原卡片不能把下次提交追加到子节点之后')
-  reopened.stop()
-  const second = f.mount('card', null, f.study.nodes[0]); await tick()
-  assert.equal(second.reference().sessionId, 'source')
-  source.add({ type: 'user/message', seq: 8, data: { source: { rpcId: 'third' }, content: [{ type: 'text', text: '第三轮' }] } })
-  await tick()
-  assert.deepEqual(f.study.nodes.map(node => node.sessionId), ['source', 'source'])
-  assert.equal(f.study.nodes[1].parentId, f.study.nodes[0].id)
-  assert.equal(f.forks.length, 0)
-  first.stop(); second.stop(); assert.equal(f.held(), 0)
-})
-
-test('旧卡片浏览不建会话，显式追问只继承到父轮结束位置', async () => {
-  const f = fixture()
-  f.bindings.get('source').add({ type: 'user/message', seq: 5, data: { source: { rpcId: 'later' } } })
-  const history = f.mount(); await tick()
-  assert.equal(history.reference(), null)
-  assert.deepEqual(f.forks, [])
-  history.stop()
-  const branch = f.mount('card-branch'); await tick()
-  assert.deepEqual(f.forks, [{ sessionId: 'source', atSeq: 3 }])
-  assert.ok(branch.binding().eventSource.getSnapshot().entries.every(({ event }) => event.seq <= 3))
-  branch.stop(); assert.equal(f.held(), 0)
-})
-
-test('卡片和划词编辑器使用不同会话，不共享 Lexical root 或草稿', async () => {
-  const f = fixture(), card = f.mount(), anchor = { text: '工具', start: 0, prefix: '', suffix: '' }
-  await tick(); card.binding().input.setDraft('卡片草稿')
-  const quote = f.mount('quote', anchor); await tick()
-  assert.notEqual(card.reference().sessionId, quote.reference().sessionId)
-  assert.equal(card.binding().input.state.getSnapshot().draft, '卡片草稿')
-  assert.match(quote.binding().input.state.getSnapshot().draft, /> 工具/)
-  card.stop(); quote.stop(); f.drafts.dispose(); assert.equal(f.held(), 0)
-})
-
-test('添加到对话复用卡片输入，保留草稿和附件，未发送时不创建节点', async () => {
-  const f = fixture(), card = f.mount(); await tick()
-  card.binding().input.setDraft('已有问题 ')
-  card.binding().input.addAttachments(['file-a'])
-  const anchor = { text: '工具调用', start: 4, prefix: '', suffix: '' }
-  await f.drafts.addToCard(f.parent, anchor)
-  assert.equal(f.forks.length, 0)
-  assert.equal(card.binding().input.state.getSnapshot().draft, '已有问题 > 工具调用 ')
-  assert.deepEqual(card.binding().input.state.getSnapshot().attachmentIds, ['file-a'])
-  assert.equal(f.study.nodes.length, 0)
-  card.binding().add({ type: 'user/message', seq: 4, data: { source: { rpcId: 'quoted-card' }, content: [{ type: 'text', text: '> 工具调用\n\n原有问题' }] } })
-  await tick()
-  assert.deepEqual(f.study.nodes[0].anchor, anchor)
-  assert.equal(f.study.nodes[0].question, '原有问题')
-  card.stop(); assert.equal(f.held(), 0)
-})
-
-test('打开分支才准备划词会话，随后复用未发送会话和独立选区草稿', async () => {
+test('卡片与划词共用一个原生会话，按父节点、选区恢复草稿和附件', async () => {
   const f = fixture(), card = f.mount()
   await tick()
-  assert.equal(f.forks.length, 0)
+  const input = card.binding().input
+  input.setDraft('卡片草稿')
+  input.addAttachments(['card-file'])
+  card.stop()
   const a = { text: '模型', start: 0, prefix: '', suffix: '' }
-  const b = { text: '工具', start: 8, prefix: '', suffix: '' }
-  const first = f.mount('quote', a)
+  const quote = f.mount('quote', a)
   await tick()
-  assert.equal(f.forks.length, 1)
-  const held = f.held()
-  let globalUpdates = 0
-  f.study.emit = () => { globalUpdates++ }
-  const id = first.reference().sessionId
-  first.binding().input.setDraft(quoteText(a.text) + '\n\n还没发送的问题')
-  first.binding().input.addAttachments(['file-a'])
-  first.stop()
-  const second = f.mount('quote', b)
+  assert.equal(quote.reference().sessionId, 'source')
+  assert.match(input.state.getSnapshot().draft, /> 模型/)
+  assert.deepEqual(input.state.getSnapshot().attachmentIds, [])
+  await input.submit('steer')
+  const [prompt] = f.prepared
+  assert.equal(prompt.parentSeq, 3)
+  assert.deepEqual(prompt.metadata.studyTree.anchor, a)
+  assert.equal(prompt.metadata.studyTree.branchKind, 'quote')
+  assert.equal(prompt.requestId, f.prompts[0][3])
+  assert.equal(prompt.sessionId, 'source')
+  assert.equal(f.prompts[0][1], 'queue')
+  assert.equal(f.prompts[0].length, 4)
+  assert.deepEqual(f.study.submitted, [prompt.metadata.studyTree.id])
+  input.setDraft('引用草稿')
+  input.addAttachments(['quote-file'])
+  quote.stop()
+  const again = f.mount()
   await tick()
-  assert.equal(second.reference().sessionId, id)
-  assert.equal(second.binding().input.state.getSnapshot().draft.includes('还没发送的问题'), false)
-  assert.match(second.binding().input.state.getSnapshot().draft, /> 工具/)
-  assert.deepEqual(second.binding().input.state.getSnapshot().attachmentIds, [])
-  second.stop()
-  const restored = f.mount('quote', a)
+  assert.equal(input.state.getSnapshot().draft, '卡片草稿')
+  assert.deepEqual(input.state.getSnapshot().attachmentIds, ['card-file'])
+  again.stop()
+  const quoteAgain = f.mount('quote', a)
   await tick()
-  assert.match(restored.binding().input.state.getSnapshot().draft, /还没发送的问题/)
-  assert.deepEqual(restored.binding().input.state.getSnapshot().attachmentIds, ['file-a'])
-  restored.stop()
-  assert.equal(f.forks.length, 1)
-  assert.equal(f.held(), held)
-  assert.equal(globalUpdates, 0)
-  card.stop(); f.drafts.dispose()
+  assert.equal(input.state.getSnapshot().draft, '引用草稿')
+  assert.deepEqual(input.state.getSnapshot().attachmentIds, ['quote-file'])
+  quoteAgain.stop()
   assert.equal(f.held(), 0)
+  assert.deepEqual(f.forks, [])
 })
 
-test('划词发送尚未接收时，新选区使用另一条草稿通道，后台接收不抢选择', async () => {
+test('从同一父节点二次发送生成新的标识，其他窗口的事件不会被认领', async () => {
+  const f = fixture(), card = f.mount()
+  await tick()
+  const input = card.binding().input
+  card.binding().add({ type: 'user/message', seq: 9, data: { source: { rpcId: 'another-window' } } })
+  assert.deepEqual(f.study.submitted, [])
+  input.setDraft('第一次')
+  await input.submit('queue')
+  input.setDraft('第二次')
+  await input.submit('queue')
+  const [first, second] = f.prepared
+  assert.notEqual(first.metadata.studyTree.id, second.metadata.studyTree.id)
+  assert.equal(first.parentSeq, second.parentSeq)
+  f.study.nodes.push({ ...f.parent, boundarySeq: 10 })
+  input.setDraft('第三次')
+  await input.submit('queue')
+  assert.equal(f.prepared[2].parentSeq, 10)
+  card.stop()
+  await assert.rejects(input.submit('queue'), /unexpected ordinary message/)
+  assert.deepEqual(f.forks, [])
+})
+
+test('添加到对话保留现有草稿与附件，删除引用后不生成失效链接', async () => {
+  const f = fixture(), card = f.mount()
+  await tick()
+  const input = card.binding().input
+  input.setDraft('问题 ')
+  input.addAttachments(['file'])
+  const anchor = { text: '工具', start: 2, prefix: 'a', suffix: 'b' }
+  await f.drafts.addToCard(f.parent, anchor)
+  assert.equal(input.state.getSnapshot().draft, '问题 > 工具 ')
+  assert.deepEqual(input.state.getSnapshot().attachmentIds, ['file'])
+  await input.submit('queue')
+  assert.deepEqual(f.prepared[0].metadata.studyTree.anchor, anchor)
+  assert.equal(f.prepared[0].metadata.studyTree.branchKind, 'card')
+  assert.deepEqual(f.prompts[0][0], [{ type: 'file', receiptId: 'file' }, { type: 'text', text: '问题 > 工具 ' }])
+  assert.deepEqual(nativeQuestion('单独问题', anchor), { question: '单独问题', anchor: null })
+  card.stop()
+})
+
+test('准备分支时切换卡片，失败不发送原生请求，原卡片保留文字和附件供重试', async () => {
+  const f = fixture(), card = f.mount()
+  await tick()
+  const input = card.binding().input
+  input.setDraft('待重试的问题')
+  input.addAttachments(['receipt'])
+  const prepare = f.study.call
+  let reject
+  f.study.call = () => new Promise((_, no) => { reject = no })
+  const flight = input.submit('enter')
+  card.stop()
+  const other = f.mount('card', null, { ...f.parent, id: 'other', endSeq: 7 })
+  assert.equal(other.reference(), undefined)
+  assert.deepEqual(f.prompts, [])
+  assert.deepEqual(f.study.submitted, [])
+  reject(Error('父节点已过期'))
+  await assert.rejects(flight, /父节点已过期/)
+  await tick()
+  assert.equal(other.reference().sessionId, 'source')
+  assert.equal(input.draftSnapshot.text, '')
+  assert.deepEqual(f.prompts, [])
+  assert.equal(f.abandoned.length, 1)
+  other.stop()
+  const retry = f.mount()
+  await tick()
+  assert.equal(input.draftSnapshot.text, '待重试的问题')
+  assert.deepEqual(input.state.getSnapshot().attachmentIds, ['receipt'])
+  f.study.call = prepare
+  await input.submit('queue')
+  assert.equal(f.prompts.length, 1)
+  assert.equal(f.prepared[0].requestId, f.prompts[0][3])
+  assert.notEqual(f.prepared[0].requestId, f.abandoned[0])
+  assert.equal(f.prepared[0].parentSeq, 3)
+  retry.stop()
+})
+
+test('原生 prompt 拒绝后保留草稿，插件卸载时恢复普通会话输入', async () => {
   const f = fixture()
-  const first = f.mount('quote', { text: '模型', start: 0, prefix: '', suffix: '' })
+  const { input, session } = f.bindings.get('source')
+  input.setDraft('普通对话草稿')
+  const ordinary = input.submit, card = f.mount()
   await tick()
-  const original = first.binding()
-  original.input.state.getSnapshot().phase = 'sending'
-  first.stop()
-  const second = f.mount('quote', { text: '工具', start: 8, prefix: '', suffix: '' })
-  await tick()
-  assert.notEqual(second.reference().sessionId, first.reference().sessionId)
-  original.add({ type: 'user/message', seq: 4, data: { source: { kind: 'user', rpcId: 'first-quote' }, content: [{ type: 'text', text: '> 模型\n\n为什么？' }] } })
-  await tick()
-  assert.equal(f.study.nodes.length, 1)
-  assert.equal(f.study.nodes[0].anchor.text, '模型')
-  assert.deepEqual(f.opened, [])
-  assert.match(second.binding().input.state.getSnapshot().draft, /> 工具/)
-  second.stop(); f.drafts.dispose()
+  input.setDraft('树上的问题')
+  input.addAttachments(['file'])
+  session.prompt = async () => ({ ok: false, error: { message: '宿主拒绝问题' } })
+  await assert.rejects(input.submit('queue'), /宿主拒绝问题/)
+  assert.equal(input.draftSnapshot.text, '树上的问题')
+  assert.deepEqual(input.state.getSnapshot().attachmentIds, ['file'])
+  assert.deepEqual(f.abandoned, [f.prepared[0].requestId])
+  f.drafts.dispose()
+  assert.equal(input.submit, ordinary)
+  assert.equal(input.draftSnapshot.text, '普通对话草稿')
+  assert.deepEqual(input.state.getSnapshot().attachmentIds, [])
+  card.stop()
   assert.equal(f.held(), 0)
 })
 
-test('已被原生 DSH 接受的消息只建一个节点，保留问题与引用来源', async () => {
-  const f = fixture(), anchor = { text: '工具\n调用', start: 0, prefix: '', suffix: '' }, q = f.mount('quote', anchor)
+test('准备期间取消发送不再投递，斜杠命令的键盘和菜单入口均保留输入', async () => {
+  const f = fixture(), binding = f.bindings.get('source'), input = binding.input
+  const directory = { ensureReady: async () => {}, resolve: (_, name) => name === 'goal' }
+  const notices = [], picks = []
+  const triggers = {
+    menu: { getSnapshot: () => ({ groups: [{ source: 'command', status: 'ready', items: [{ name: 'goal' }, { name: 'client' }] }] }) },
+    pick: (_, index) => picks.push(index), adjudicate: async line => line,
+  }
+  binding.ctx.get = () => ({ directory })
+  input.deps.inputTriggers = () => triggers
+  input.notify = (_, message) => notices.push(message)
+  const card = f.mount()
   await tick()
-  q.binding().add({ type: 'user/message', seq: 4, data: { source: { rpcId: 'accepted' }, content: [{ type: 'text', text: quoteText(anchor.text) + '\n\n为什么？' }] } })
-  q.binding().notify(); await tick()
-  assert.equal(f.study.nodes.length, 1)
-  assert.equal(f.study.nodes[0].question, '为什么？')
-  assert.deepEqual(f.study.nodes[0].anchor, anchor)
-  assert.equal(f.watched.length, 1); assert.equal(f.opened.length, 1)
-  assert.equal(q.request.sent, true)
-  q.stop(); assert.equal(f.held(), 0)
-})
-
-test('提交过程中切换卡片仍记录问答，完成后不抢走当前选择', async () => {
-  const f = fixture(), card = f.mount(); await tick()
-  const binding = card.binding(); binding.input.state.getSnapshot().phase = 'sending'
-  card.stop(); assert.equal(f.held(), 1)
-  binding.add({ type: 'user/message', seq: 4, data: { source: { rpcId: 'background' }, content: [{ type: 'text', text: '异步问题' }] } })
-  await tick(); assert.equal(f.study.nodes.length, 1); assert.equal(f.opened.length, 0); assert.equal(f.held(), 0)
-})
-
-test('节点写入失败后刷新只恢复记录，不重复发送或创建新的模型请求', async () => {
-  const f = fixture(), card = f.mount(); await tick(); f.study.failSave = true
-  card.binding().add({ type: 'user/message', seq: 4, data: { source: { rpcId: 'recover' }, content: [{ type: 'text', text: '保留此问答' }] } })
-  await tick(); card.stop()
-  assert.equal(f.study.nodes.length, 0)
-  const pending = JSON.parse(storage.get('dsh-study-tree:native-submissions'))
-  assert.equal(Object.keys(pending).length, 1)
-  f.study.failSave = false; await f.drafts.recover(); await f.drafts.recover()
-  assert.equal(f.study.nodes.length, 1); assert.equal(f.study.nodes[0].id, Object.keys(pending)[0])
-  assert.equal(f.forks.length, 0)
-})
-
-test('旧版卡片草稿只迁移一次，删除原生引用时不保留失效的引用关系', async () => {
-  storage.set('dsh-study-tree:view:v1', JSON.stringify({ drafts: { root: '旧草稿' } }))
-  const f = fixture(), card = f.mount(); await tick()
-  assert.equal(card.binding().input.state.getSnapshot().draft, '旧草稿')
-  card.binding().input.setDraft(''); card.stop()
-  const again = f.mount(); await tick(); assert.equal(again.binding().input.state.getSnapshot().draft, ''); again.stop()
-  assert.deepEqual(nativeQuestion('独立问题', { text: '原文' }), { question: '独立问题', anchor: null })
+  input.setDraft('/compact')
+  await input.submit('queue')
+  assert.equal(input.draftSnapshot.text, '/compact')
+  assert.deepEqual(f.prepared, [])
+  await assert.rejects(triggers.adjudicate('/goal 目标'), /普通对话/)
+  assert.equal(await triggers.adjudicate('/tmp/file'), '/tmp/file')
+  triggers.pick('command', 0)
+  triggers.pick('command', 1)
+  assert.deepEqual(picks, [1])
+  assert.equal(notices.length, 2)
+  const abort = new AbortController()
+  const send = f.study.ctx.conversation.sendSession
+  f.study.ctx.conversation.sendSession = (target, text, files, mode, _, accept) =>
+    send(target, text, files, mode, abort.signal, accept)
+  let prepared
+  f.study.call = () => new Promise(resolve => { prepared = resolve })
+  input.setDraft('取消测试')
+  const flight = input.submit('queue')
+  abort.abort(Error('会话已关闭'))
+  prepared()
+  await assert.rejects(flight, /会话已关闭/)
+  assert.deepEqual(f.prompts, [])
+  assert.equal(input.draftSnapshot.text, '取消测试')
+  card.stop()
+  triggers.pick('command', 0)
+  assert.deepEqual(picks, [1, 0])
 })

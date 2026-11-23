@@ -62,3 +62,13 @@ test('生成中或没有最终答案时保持过程可见，避免收起后空�
   assert.equal(processVisibility(node, process, false).open, true)
   assert.equal(processVisibility(node, { ...process, turnClosed: true, spec: { ...process.spec, answerAnchorSeq: null } }, false).hidden, false)
 })
+
+test('有最终答案的轮次成功结束后默认收起过程，手动选择优先', () => {
+  const process = { turnClosed: true, hasExternalProcess: true, spec: { processStartSeq: 10, answerAnchorSeq: 40, answerStep: 3 } }
+  const tool = { kind: 'tool-call', anchorSeq: 25, location: { turn: { end: { data: { reason: { kind: 'completed' } } } } } }
+  assert.equal(processVisibility(tool, { ...process, turnClosed: false }, null).open, true)
+  assert.equal(processVisibility(tool, process, null).hidden, true)
+  assert.equal(processVisibility(tool, process, true).hidden, false)
+  const failed = { ...tool, location: { turn: { end: { data: { reason: { kind: 'failed' } } } } } }
+  assert.equal(processVisibility(failed, process, null).hidden, false)
+})

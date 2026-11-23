@@ -37,27 +37,26 @@ const fs = require('node:fs'),
       flow = card.locator('.st-turn-flow'),
       rect = await card.boundingBox(),
       handle = await card.elementHandle()
-    assert.equal(Math.round(rect.width), 640)
-    assert.equal(Math.round(rect.height), 360)
+    assert.equal(Math.round(rect.width), 768)
+    assert.equal(Math.round(rect.height), 512)
     await flow.getByText(/第一段已经到达/).waitFor()
     assert.equal(await card.locator('.st-generating').count(), 1)
     assert.equal(await card.locator('[data-composer-input]').count(), 0)
     assert.equal(await card.locator('.st-md').count(), 0)
     const first = await flow.innerText()
     await flow.getByText(/第二段正在追加/).waitFor()
+    const tool = flow.locator('[data-chat-flow-kind="tool-call"]')
+    assert.ok((await tool.boundingBox()).height > 1, '生成中显示工具过程')
     assert.notEqual(await flow.innerText(), first)
     assert.deepEqual(await card.boundingBox(), rect)
     assert.ok(await handle.evaluate((e) => e.isConnected))
     console.log(
-      'incremental native stream before end; 640x360 stable; no next editor/fallback parser',
+      'incremental native stream before end; 768x512 stable; no next editor/fallback parser',
     )
     await card.locator('[data-composer-input][contenteditable="true"]').waitFor({ timeout: 20000 })
     assert.equal(await card.locator('.st-generating').count(), 0)
-    assert.equal((await flow.innerText()).split('第一段已经到达').length - 1, 1)
-    const control = flow.locator('button[data-turn-process]')
+    const control = card.locator('.st-card-head button[data-turn-process]')
     assert.equal(await control.isEnabled(), true)
-    const tool = flow.locator('[data-chat-flow-kind="tool-call"]')
-    await control.click()
     assert.equal(await control.getAttribute('aria-expanded'), 'false')
     assert.ok((await tool.boundingBox()).height < 1)
     assert.ok((await flow.innerText()).includes('第三段是最终结果'))
@@ -66,6 +65,7 @@ const fs = require('node:fs'),
     await control.click()
     assert.equal(await control.getAttribute('aria-expanded'), 'true')
     assert.ok((await tool.boundingBox()).height > 1)
+    assert.equal((await flow.innerText()).split('第一段已经到达').length - 1, 1)
     console.log(
       'native duration control folds process only, answer/card geometry retained; toggle works',
     )
