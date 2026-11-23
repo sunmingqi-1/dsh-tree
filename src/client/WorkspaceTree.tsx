@@ -1,5 +1,5 @@
 import React, { useLayoutEffect, useRef, useSyncExternalStore } from 'react'
-import { ChevronRight, GitBranch, Plus, PanelRightClose } from 'lucide-react'
+import { ChevronRight, GitBranch, Plus, PanelRightClose, Code2, FileText } from 'lucide-react'
 import { pathTo } from './tree'
 import { isFolded, setBranchFolds, useBranchFolds } from './branchFolds'
 import { nodeMarks } from '../nodeMarks.js'
@@ -87,7 +87,7 @@ export function WorkspaceTree({
             >
               {hasChildren ? (
                 <ChevronRight size={13} style={{ rotate: expanded ? '90deg' : undefined }} />
-              ) : (
+              ) : turn.kind === 'code' ? <Code2 size={12} /> : turn.kind === 'markdown' ? <FileText size={12} /> : (
                 <GitBranch size={12} />
               )}
             </button>
@@ -101,7 +101,7 @@ export function WorkspaceTree({
             >
               {turn.parentId ? turn.question : turn.title || turn.question}
             </button>
-            {turn.status === 'sending' && (
+            {!turn.kind && turn.status === 'sending' && (
               <span className="st-tree-running" aria-label="正在回答" />
             )}
             <span className="st-tree-menu">

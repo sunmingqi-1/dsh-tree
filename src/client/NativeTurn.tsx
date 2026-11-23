@@ -16,6 +16,7 @@ import {
 import { controlSeat, mirrorNativeControl } from './nativeControls'
 import { turnKeys, processVisibility } from './turnSlice'
 import { useStudy } from './WorkspaceTree'
+import { nearestTurn } from './tree'
 
 export const turnSeat = 'studyTree.card.turn'
 const motion = {
@@ -81,7 +82,7 @@ const NativeTurnPortal = React.memo(function NativeTurnPortal({ study, seat, nod
     void ref.ready
       .then(async (binding) => {
         const parent = study.nodes.find((n) => n.id === node.parentId)
-        await binding.session.loadThrough(parent?.endSeq ?? 0)
+        await binding.session.loadThrough(parent ? nearestTurn(study.nodes, parent)?.endSeq ?? 0 : 0)
         if (!alive) return
         study.turns.bindings.set(node.sessionId, study.ctx.uiConversation.binding(binding))
         study.turns.holds.set(node.sessionId, (study.turns.holds.get(node.sessionId) || 0) + 1)

@@ -2,6 +2,9 @@ import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Panel, useReactFlow, useStore } from '@xyflow/react'
 import { Plus, Minus, LocateFixed, Scan, Network, ListTree, ChevronDown, Check } from 'lucide-react'
+import { MaterialIcon } from './MaterialCard'
+import { materialLabel } from '../material.js'
+import type { Material } from './tree'
 
 function LineIcon({ rounded }) {
   return <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -64,7 +67,23 @@ function EdgeMenu({ value, onChange }) {
   </>
 }
 
-export function CanvasTools({ focusCurrent, edgeStyle, onEdgeStyle, onArrange, onExpandAll, hiddenCount }) {
+function AddCardMenu({ onAdd }: { onAdd: (kind: Material['kind']) => void }) {
+  const id = React.useId()
+  const popup = useRef<HTMLDivElement>(null)
+  return <>
+    <button type="button" className="st-layout-action st-add-card" aria-label="添加卡片" title="添加卡片" popovertarget={id}>
+      <Plus size={16} aria-hidden /><span>添加卡片</span>
+    </button>
+    <div ref={popup} id={id} popover="auto" className="st-edge-popup st-add-card-popup" role="group" aria-label="选择卡片类型">
+      {(['markdown', 'code'] as const).map((kind, index) => <button key={kind} type="button" autoFocus={index === 0}
+        onClick={() => { popup.current?.hidePopover(); onAdd(kind) }}>
+        <MaterialIcon kind={kind} />{materialLabel(kind)}卡片
+      </button>)}
+    </div>
+  </>
+}
+
+export function CanvasTools({ focusCurrent, edgeStyle, onEdgeStyle, onArrange, onExpandAll, hiddenCount, onAddCard }) {
   const flow = useReactFlow(), zoom = useStore(s => Math.round(s.transform[2] * 100))
   return <Panel position="bottom-center" className="st-canvas-tools" role="toolbar" aria-label="画布工具">
     <div className="st-zoom-group">
@@ -73,6 +92,7 @@ export function CanvasTools({ focusCurrent, edgeStyle, onEdgeStyle, onArrange, o
       <button aria-label="放大" title="放大" onClick={() => flow.zoomIn({ duration: 120 })}><Plus size={16} /></button>
     </div>
     <i className="st-tool-divider" />
+    {onAddCard && <AddCardMenu onAdd={onAddCard} />}
     <EdgeMenu value={edgeStyle} onChange={onEdgeStyle} />
     <button className="st-layout-action" aria-label="自动布局" title="自动布局" onClick={onArrange}><Network size={16} /><span>自动布局</span></button>
     <button className="st-layout-action" aria-label="展开全部" disabled={!hiddenCount}

@@ -3,12 +3,37 @@ export interface Anchor {
   start: number
   prefix: string
   suffix: string
+  revision?: number
 }
 export function isUserPrompt(event) {
   const source = event.data?.source
   return event.type === 'user/message' && !!source?.rpcId && (!source.kind || source.kind === 'user')
 }
-export interface Turn {
+interface CardNode {
+  id: string
+  treeId: string
+  parentId: string | null
+  question: string
+  title?: string
+  mark?: keyof typeof import('../nodeMarks.js').nodeMarks | null
+  branchKind?: 'card' | 'quote'
+  anchor: Anchor | null
+  created: number
+  sessionId: string | null
+  revision: number
+}
+export interface Material extends CardNode {
+  kind: 'markdown' | 'code'
+  parentId: string
+  sessionId: string
+  content: string
+  language?: string
+}
+export type MaterialRef = { id: string; revision: number }
+export type CanvasNode = Material | Turn
+export interface Turn extends CardNode {
+  kind?: never
+  material?: MaterialRef
   logged?: boolean
   turn?: number
   activeTurns?: number[]
@@ -16,43 +41,39 @@ export interface Turn {
   continuations?: { turn: number; startSeq: number }[]
   startSeq?: number
   boundarySeq?: number | null
-  title?: string
-  mark?: keyof typeof import('../nodeMarks.js').nodeMarks | null
-  branchKind?: 'card' | 'quote'
   versionOf?: string
-  id: string
-  treeId: string
-  parentId: string | null
-  question: string
-  anchor: Anchor | null
-  created: number
-  sessionId: string | null
   requestId: string | null
   endSeq: number | null
   status: 'preparing' | 'sending' | 'complete' | 'failed' | 'stopped'
   error: string | null
-  revision: number
 }
 export function isQuoteBranch(node: { branchKind?: Turn['branchKind']; anchor?: Anchor | null }) {
   // Sessions written before input origins were recorded only have the quote.
   return node.branchKind ? node.branchKind === 'quote' : !!node.anchor
 }
-export function branchName(turn: Turn) {
+export function branchName(turn: CanvasNode) {
   return turn.question + (turn.anchor ? ' · ' + turn.anchor.text : '')
 }
-export function pathTo(nodes: Turn[], id: string | null): Turn[] {
+export function pathTo<T extends CanvasNode>(nodes: T[], id: string | null): T[] {
   const byId = new Map(nodes.map((n) => [n.id, n]))
   const seen = new Set<string>()
-  const path = []
+  const path: T[] = []
+  let nextTurn: Turn | undefined
   while (id && !seen.has(id)) {
     const n = byId.get(id)
     if (!n) break
     seen.add(id)
-    const inherited = path[0]?.parentTurns
-    path.unshift(inherited && n.continuations?.length ? { ...n, activeTurns: inherited } : n)
+    const inherited = nextTurn?.parentTurns
+    path.unshift(inherited && !n.kind && n.continuations?.length ? { ...n, activeTurns: inherited } : n)
+    if (!n.kind) nextTurn = n
     id = n.parentId
   }
   return path
+}
+
+export function nearestTurn(nodes: CanvasNode[], node: CanvasNode | undefined): Turn | undefined {
+  if (!node?.kind) return node
+  return pathTo(nodes, node.id).findLast((item): item is Turn => !item.kind)
 }
 
 export function readTurn(entries, requestId: string | undefined, startSeq?: number) {

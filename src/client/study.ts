@@ -1,9 +1,16 @@
 import { TreeLog, quoteText } from '../treeLog.js'
-import { isQuoteBranch, readTurn, type Turn, type Anchor } from './tree'
+import { isQuoteBranch, nearestTurn, readTurn, type CanvasNode, type Material, type MaterialRef, type Turn, type Anchor } from './tree'
 import { NativeDrafts } from './nativeDrafts'
+import { MaterialDrafts } from './materialDrafts'
+import { markdownCardTitle } from '../material.js'
 import { NativeTurns, NativeInteractions } from './nativeState'
 import { bindBranchInput, sendBranchPrompt } from './branchPrompt'
 export class Study {
+  materialDrafts = new MaterialDrafts(node => this.saveMaterial(node.kind === 'markdown'
+    ? { ...node, question: markdownCardTitle(node.content) } : node), error => {
+    this.error = error.message
+    this.emit()
+  })
   composers = new NativeDrafts(this)
   turns = new NativeTurns()
   interactions = new NativeInteractions(this)
@@ -37,7 +44,7 @@ export class Study {
   navigation: { id: string | null; revision: number } | null = null
   workspaceId: string | undefined
   turnNumbers = new Map<string, number>()
-  nodes: Turn[] = []
+  nodes: CanvasNode[] = []
   answers = new Map<string, string>()
   private turnAnswers = new Map<string, Map<number, string>>()
   answerFor(node: Turn) {
@@ -156,6 +163,10 @@ export class Study {
         const merged = new Map(this.nodes.map(row => [row.id, row]))
         for (const row of changes.values()) {
           const old = merged.get(row.id)
+          if (row.kind) {
+            if (!old || old.revision < row.revision) merged.set(row.id, row)
+            continue
+          }
           if (row.continuations?.length && (old?.endSeq !== row.endSeq || old?.activeTurns?.at(-1) !== row.activeTurns?.at(-1)))
             this.answers.delete(row.id)
           merged.set(row.id, { ...old, ...row, revision: old?.revision || 0 })
@@ -198,7 +209,7 @@ export class Study {
     this.workspaceId = this.workspaceFor(root?.sessionId)
     this.navigation = { id, revision: (this.navigation?.revision || 0) + 1 }
     this.setActive(id)
-    if (node.logged && node.sessionId) this.follow(node.sessionId)
+    if ((node.kind || node.logged) && node.sessionId) this.follow(node.sessionId)
     this.enabled = true
     if (node.sessionId) this.showSession(node.sessionId)
     this.emit()
@@ -227,8 +238,9 @@ export class Study {
       const previous = revisions.get(row.id)
       if (row.logged) {
         this.turnNumbers.set(row.id, row.turn)
-        const turn = previous?.logged && (previous.boundarySeq ?? -1) > (row.boundarySeq ?? -1) ? previous : row
-        const annotation = previous?.logged && previous.revision > row.revision ? previous : row
+        const priorTurn = previous && !previous.kind && previous.logged ? previous : undefined
+        const turn = priorTurn && (priorTurn.boundarySeq ?? -1) > (row.boundarySeq ?? -1) ? priorTurn : row
+        const annotation = priorTurn && priorTurn.revision > row.revision ? priorTurn : row
         revisions.set(row.id, { ...turn, revision: annotation.revision, title: annotation.title, mark: annotation.mark })
       } else if ((previous?.revision ?? -1) < row.revision) revisions.set(row.id, row)
     }
@@ -238,30 +250,45 @@ export class Study {
     this.error = ''
     this.emit()
   }
-  merge(node: Turn) {
+  merge(node: CanvasNode) {
     const prev = this.nodes.find((n) => n.id === node.id)
     if (!prev) this.nodes = [...this.nodes, node]
     else if (prev.revision < node.revision)
       this.nodes = this.nodes.map((n) => (n.id === node.id ? node : n))
   }
-  async save(n: Turn) {
+  async save(n: CanvasNode) {
+    if (n.kind) return this.saveMaterial(n)
     const saved = await this.call('save', { request: n })
     const old = this.nodes.find(n => n.id === saved.id)
-    this.merge(old?.logged ? { ...old, title: saved.title, mark: saved.mark, revision: saved.revision } : saved)
+    this.merge(old && !old.kind && old.logged ? { ...old, title: saved.title, mark: saved.mark, revision: saved.revision } : saved)
     this.emit()
     return saved as Turn
   }
+  async saveMaterial(n: Material) {
+    const saved = await this.call('saveMaterial', { request: n })
+    this.merge(saved)
+    this.emit()
+    return saved as Material
+  }
+  readMaterial(sessionId: string, ref: MaterialRef): Promise<Material> {
+    return this.call('readMaterial', { request: { sessionId, ...ref } })
+  }
   async submit(
-    parent: Turn | null,
+    source: CanvasNode | null,
     question: string,
     anchor: Anchor | null,
     versionOf?: string,
   ) {
-    if (!parent && versionOf && !this.nodes.find(n => n.id === versionOf)?.logged) throw new Error('旧版学习树仅支持阅读。请新建学习主题继续。')
+    const original = this.nodes.find(n => n.id === versionOf && !n.kind) as Turn | undefined
+    if (!source && versionOf && !original?.logged) throw new Error('旧版学习树仅支持阅读。请新建学习主题继续。')
+    const current = this.nodes.find(n => n.id === source?.id) ?? source
+    const parent = current && nearestTurn(this.nodes, current)
+    if (current && !parent) throw new Error('资料的来源问答不可用')
     if (parent && (parent.endSeq == null || !parent.sessionId))
       throw new Error('请等待来源回答结束')
     if (parent && !parent.logged) throw new Error('旧版学习树仅支持阅读。请新建学习主题继续。')
-    if (parent) parent = this.nodes.find(n => n.id === parent.id) ?? parent
+    const material = current?.kind ? current : undefined
+    const reference = material && { id: material.id, revision: original?.material?.revision ?? anchor?.revision ?? material.revision }
     // Rewriting the root starts another independent tree with empty history.
     const sessionId = parent?.sessionId || await this.ctx.sessions.create({ workspaceId: this.workspaceId })
     this.follow(sessionId)
@@ -270,11 +297,11 @@ export class Study {
       const id = crypto.randomUUID()
       const text = anchor ? quoteText(anchor.text) + '\n\n' + question : question
       const handle = binding.session.beginSubmission({ text, mode: 'queue', attachments: [] })
-      const original = versionOf && this.nodes.find(n => n.id === versionOf)
       const branchKind = (original ? isQuoteBranch(original) : !!anchor) ? 'quote' : 'card'
-      const meta = { studyTree: { id, ...(parent && { branchKind }), ...(versionOf && { versionOf }), ...(anchor && { anchor }) } }
+      const meta = { studyTree: { id, ...(parent && { branchKind }), ...(versionOf && { versionOf }), ...(anchor && { anchor }),
+        ...(reference && { material: reference }) } }
       await sendBranchPrompt(this, sessionId, binding.session, handle, {
-        parentSeq: parent?.boundarySeq ?? parent?.endSeq ?? null, metadata: meta, onRequest: this.onSubmission(id),
+        parentSeq: parent?.boundarySeq ?? parent?.endSeq ?? null, metadata: meta, material, onRequest: this.onSubmission(id),
       }, [{ type: 'text', text }])
     })
   }

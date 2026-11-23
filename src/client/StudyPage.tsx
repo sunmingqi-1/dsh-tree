@@ -28,11 +28,9 @@ import {
   type ReactFlowInstance,
   type Viewport,
 } from '@xyflow/react'
-import Markdown from 'react-markdown'
-import gfm from 'remark-gfm'
-import math from 'remark-math'
-import katex from 'rehype-katex'
-import { isQuoteBranch, pathTo, type Turn } from './tree'
+import { isQuoteBranch, nearestTurn, pathTo, type Anchor, type CanvasNode, type Material, type Turn } from './tree'
+import { markdownCardTitle, materialLabel, materialMarkdown } from '../material.js'
+import { MarkdownBody, MaterialCard, MaterialHistory } from './MaterialCard'
 import { nodeMarks } from '../nodeMarks.js'
 import { NodeMarkPicker } from './NodeMarkPicker'
 import { directionOf, indexBranches, setBranchFolds, setIndividualFolds, useBranchFolds, visibleBranches } from './branchFolds'
@@ -66,13 +64,7 @@ const states = {
 const Body = React.memo(function Body({ n, text }: { n: Turn; text: string }) {
   return (
     <div className="st-md nodrag nopan nowheel" data-answer={n.id}>
-      <Markdown
-        remarkPlugins={[gfm, math]}
-        rehypePlugins={[[katex, { output: 'mathml' }]]}
-        skipHtml
-      >
-        {text}
-      </Markdown>
+      <MarkdownBody text={text} />
     </div>
   )
 })
@@ -84,8 +76,9 @@ const Answer = React.memo(function Answer({ study, n }) {
 })
 function Composer({ id }) {
   const ui = useContext(UI)
-  const node = ui.byId.get(id)
-  const pending = useNodePending(ui.study, node)
+  const node: CanvasNode = ui.byId.get(id)
+  const origin = nearestTurn(ui.study.nodes, node)
+  const pending = useNodePending(ui.study, node.kind ? null : node)
   const ref = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
     const element = ref.current, card = element?.closest<HTMLElement>('.st-card')
@@ -96,7 +89,8 @@ function Composer({ id }) {
   }, [])
   return <div ref={ref} className="st-card-composer">{pending
     ? <NativeInteractionSeat study={ui.study} node={node} />
-    : node.endSeq == null ? <RunningStatus study={ui.study} node={node} />
+    : !node.kind && node.endSeq == null ? <RunningStatus study={ui.study} node={node} />
+    : node.kind && origin?.endSeq == null ? <span className="st-material-context">来源问答结束后可以提问</span>
     : <NativeComposerSeat study={ui.study} parent={node} />}</div>
 }
 function CardStatus({ study, node }) {
@@ -106,7 +100,7 @@ function CardStatus({ study, node }) {
 }
 function Card({ data, resizing: nodeResizing }) {
   const ui = useContext(UI),
-    n: Turn = data.turn
+    n: CanvasNode = data.turn
   const interaction = useContext(Interaction)
   const active = n.id === ui.active
   const mark = n.mark && nodeMarks[n.mark]
@@ -114,9 +108,13 @@ function Card({ data, resizing: nodeResizing }) {
   const card = useRef<HTMLElement>(null)
   const header = useRef<HTMLElement>(null)
   const flowStore = useStoreApi()
+  const focusMaterial = n.kind && ui.newMaterialId === n.id
+  useLayoutEffect(() => {
+    if (focusMaterial) ui.clearMaterialFocus(n.id)
+  }, [focusMaterial, n.id])
   useEffect(() => {
     const body = card.current?.querySelector<HTMLElement>('.st-body')
-    if (!body || n.endSeq !== null) return
+    if (!body || n.kind || n.endSeq !== null) return
     let pinned = true, frame = 0
     const scroll = () => { pinned = body.scrollHeight - body.clientHeight - body.scrollTop < 40 }
     const observer = new MutationObserver(() => {
@@ -126,7 +124,7 @@ function Card({ data, resizing: nodeResizing }) {
     body.addEventListener('scroll', scroll)
     observer.observe(body, { childList: true, subtree: true, characterData: true })
     return () => { observer.disconnect(); body.removeEventListener('scroll', scroll); cancelAnimationFrame(frame) }
-  }, [n.id, n.endSeq])
+  }, [n.id, !n.kind && n.endSeq])
   useLayoutEffect(() => {
     if (!card.current) return
     const observer = new ResizeObserver(([entry]) => {
@@ -150,6 +148,8 @@ function Card({ data, resizing: nodeResizing }) {
   return (
     <article
       ref={card}
+      data-material-kind={n.kind}
+      aria-label={n.kind ? n.question : undefined}
       data-mark={mark ? n.mark : undefined}
       style={mark ? { '--st-mark': mark.color } as React.CSSProperties : undefined}
       className={'st-card ' + (active ? 'active ' : '') + (customSize || nodeResizing ? 'sized ' : '') + (ui.pathIds.has(n.id) ? 'onpath' : '')}
@@ -167,18 +167,25 @@ function Card({ data, resizing: nodeResizing }) {
       />
       <Handle id="incoming" type="target" position={isQuoteBranch(n) ? Position.Left : Position.Top} />
       {n.parentId && <BranchInlet turn={n} onClick={() => ui.toggleBranch(ui.byId.get(n.parentId), n, true)} />}
-      <header className="st-card-head" ref={header}>
+      {n.kind ? <ViewportAnswer defer={data.largeTree && !active}>
+        <MaterialCard study={ui.study} material={n} autoFocus={focusMaterial} nodeActions={<>
+          {n.anchor && <button type="button" title={n.anchor.text} aria-label={'定位引用原文：' + n.anchor.text}
+            onClick={() => void ui.back(n)}>↖</button>}
+          <NodeMarkPicker mark={n.mark} onChange={value => ui.setMark(n, value)} />
+          <GripHorizontal className="st-drag-hint" size={14} aria-hidden />
+        </>} />
+      </ViewportAnswer> : <header className="st-card-head" ref={header}>
         <div className="st-grip">
           <span className="st-kind">
-            {n.parentId ? <CornerDownRight size={13} /> : <GitBranch size={13} />}{' '}
+            {n.parentId ? <CornerDownRight size={13} /> : <GitBranch size={13} />}
             {n.parentId ? (isQuoteBranch(n) ? '引用追问' : '追问') : '学习起点'}
           </span>
           <div className="st-head-topic">
             <h3 className="st-question nodrag nopan nowheel" title={n.question}>{n.question}</h3>
-            {n.anchor && (
-              <button className="st-quote nodrag" title={n.anchor.text} aria-label={'定位引用原文：' + n.anchor.text}
+            {(n.anchor || n.material) && (
+              <button className="st-quote nodrag" title={n.anchor?.text} aria-label={n.anchor ? '定位引用原文：' + n.anchor.text : '查看提问时的资料'}
                 onClick={event => { event.stopPropagation(); ui.back(n) }}>
-                ↖ {n.anchor.text}
+                ↖ {n.anchor?.text || '参考资料'}
               </button>
             )}
           </div>
@@ -187,14 +194,15 @@ function Card({ data, resizing: nodeResizing }) {
           <NodeMarkPicker mark={n.mark} onChange={value => ui.setMark(n, value)} />
           <GripHorizontal className="st-drag-hint" size={14} aria-hidden />
         </div>
-      </header>
+      </header>}
+      {!n.kind && (
           <div className="st-answer-region">
-          <div className="st-body nodrag nopan nowheel">
+          <div className="st-body nowheel nodrag nopan">
             <ViewportAnswer defer={data.largeTree && !active && n.endSeq != null}>
               <Answer study={ui.study} n={n} />
             </ViewportAnswer>
           </div>
-          {n.versionOf && ui.byId.has(n.versionOf) && (
+          {!n.kind && n.versionOf && ui.byId.has(n.versionOf) && (
             <button
               className="st-fold nodrag"
               onClick={(e) => {
@@ -206,7 +214,8 @@ function Card({ data, resizing: nodeResizing }) {
             </button>
           )}
           </div>
-          {active && <Composer key={n.id} id={n.id} />}
+      )}
+      {active && <Composer key={n.id} id={n.id} />}
       <Handle id="card" type="source" position={Position.Bottom} />
       <Handle id="quote" type="source" position={Position.Right} />
       {(['card', 'quote'] as const).map(direction => (
@@ -276,6 +285,7 @@ function Canvas({
   onArrange,
   onExpandAll,
   hiddenCount,
+  onAddCard,
 }) {
   const { display, onNodesChange, begin, finish } = useAdaptiveNodes(nodes, onCommit, interacting)
   const interaction = React.useMemo(() => ({ begin, finish }), [begin, finish])
@@ -349,6 +359,7 @@ function Canvas({
         onArrange={onArrange}
         onExpandAll={onExpandAll}
         hiddenCount={hiddenCount}
+        onAddCard={onAddCard}
       />
     </ReactFlow>
     </Interaction.Provider>
@@ -362,6 +373,8 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
   const [error, setError] = useState(''),
     [busy, setBusy] = useState(false)
   const [editing, setEditing] = useState(null)
+  const [newMaterialId, setNewMaterialId] = useState<string | null>(null)
+  const [materialHistory, setMaterialHistory] = useState<{ material: Material; versionAnchor?: Anchor } | null>(null)
   const lock = useRef(false),
     flow = useRef(null),
     root = useRef(null)
@@ -379,6 +392,8 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
   const byId = React.useMemo(() => new Map(study.nodes.map((n) => [n.id, n])), [study.nodes]),
     path = React.useMemo(() => pathTo(study.nodes, active), [study.nodes, active]),
     pathIds = React.useMemo(() => new Set(path.map((n) => n.id)), [path])
+  const activeNode = byId.get(active)
+  const canAddMaterial = activeNode && (activeNode.kind || activeNode.logged)
   const folds = useBranchFolds()
   const { children, counts } = React.useMemo(() => indexBranches(turns), [turns])
   const visibleIds = React.useMemo(() => visibleBranches(children, folds, pathIds), [children, folds, pathIds])
@@ -529,7 +544,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     schedule()
   }
   useEffect(() => {
-    study.observe(turns, path)
+    study.observe(turns.filter(n => !n.kind), path.filter(n => !n.kind))
   }, [study, turns, path])
   useEffect(() => () => study.observe([], []), [study])
   useLayoutEffect(() => {
@@ -560,12 +575,16 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     const cancel = (e) => {
       if (e.key === 'Escape') {
         setSelection(null)
-        root.current?.querySelector('.st-actions')?.removeAttribute('open')
+        root.current?.querySelectorAll('.st-actions[open]').forEach(menu => menu.removeAttribute('open'))
       }
     }
     const dismissMenu = (event: PointerEvent) => {
-      if (event.target instanceof Element && !event.target.closest('.st-actions'))
-        root.current?.querySelector('.st-actions[open]')?.removeAttribute('open')
+      if (event.target instanceof Element) {
+        const target = event.target
+        root.current?.querySelectorAll('.st-actions[open]').forEach(menu => {
+          if (!menu.contains(target)) menu.removeAttribute('open')
+        })
+      }
     }
     window.addEventListener('keydown', cancel)
     document.addEventListener('pointerdown', dismissMenu, true)
@@ -584,20 +603,46 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     const size = sizeOf(n.id, sizes.current)
     if (p) flow.current?.setCenter(p.x + size.width / 2, p.y + size.height / 2, { zoom: 1, duration: 160 })
   }
-  function back(n) {
+  async function openMaterial(kind: Material['kind'], parent: CanvasNode, anchor: Anchor | null = null, language?: string) {
+    if (!parent.sessionId || !nearestTurn(study.nodes, parent)?.logged) return
+    setSelection(null)
+    try {
+      const saved = await study.saveMaterial({
+        id: crypto.randomUUID(), sessionId: parent.sessionId, treeId: parent.treeId,
+        parentId: parent.id, kind, question: kind === 'code' ? '代码片段' : markdownCardTitle(anchor?.text || ''),
+        anchor, content: anchor?.text ?? '', language, revision: 0, created: Date.now(),
+      })
+      setNewMaterialId(saved.id)
+      study.open(saved.id)
+    } catch (error) { setError(error.message) }
+  }
+  async function back(n: CanvasNode) {
     const parent = byId.get(n.parentId)
     if (!parent) return
     focus(parent)
+    const version = n.kind ? n.anchor?.revision : n.material?.revision
+    if (parent.kind && version && version !== parent.revision) {
+      try {
+        const material = await study.readMaterial(parent.sessionId, { id: parent.id, revision: version })
+        if (study.active === parent.id)
+          setMaterialHistory({ material, versionAnchor: n.anchor || undefined })
+      } catch (error) { setError(error.message) }
+      return
+    }
+    if (!n.anchor) return
     study.turns.reveal.get(parent.id)?.()
     field('expanded', parent.id, true)
     requestAnimationFrame(() => {
-      const body = root.current?.querySelector('.st-card [data-answer="' + parent.id + '"]')
-      if (body && !locate(body, n.anchor)) setError('已返回来源节点，原句位置无法唯一确定')
+      const body = Array.from(root.current?.querySelectorAll<HTMLElement>('.st-card [data-answer="' + CSS.escape(parent.id) + '"]') || [])
+        .find(element => element.getClientRects().length)
+      if (body && locate(body, n.anchor)) return
+      if (parent.kind === 'code') setMaterialHistory({ material: parent, versionAnchor: n.anchor })
+      else if (body) setError('已返回来源节点，原句位置无法唯一确定')
     })
   }
   async function submit(parent, raw, anchor, versionOf?: string) {
     const prompt = raw.trim() || (anchor ? '请解释「' + anchor.text + '」' : '')
-    if (!prompt || lock.current || (parent && parent.endSeq == null)) return
+    if (!prompt || lock.current || (parent && nearestTurn(study.nodes, parent)?.endSeq == null)) return
     lock.current = true
     setBusy(true)
     setError('')
@@ -616,8 +661,8 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
       setBusy(false)
     }
   }
-  function capture(e, context) {
-    if (e.target.closest('.st-native-composer, .st-quote-popover, .st-selection-actions')) return
+  async function capture(e, context) {
+    if (e.target.closest('.st-native-composer, .st-quote-popover, .st-selection-actions, .st-material-dialog, .st-material-inline')) return
     const s = window.getSelection()
     if (!s?.rangeCount || s.isCollapsed) {
       if (!e.target.closest('.st-quote-popover')) setSelection(null)
@@ -626,15 +671,28 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
     const range = s.getRangeAt(0),
       body = range.startContainer.parentElement?.closest('[data-answer]')
     if (!body || !nativeFrame.contains(body)) return
-    if (byId.get(body.dataset.answer)?.endSeq == null) return
+    const node = byId.get(body.dataset.answer)
+    if (!node || nearestTurn(study.nodes, node)?.endSeq == null) return
     const anchor = selectionAt(body, range)
     if (!anchor) return
     if (context) e.preventDefault()
     const rect = range.getBoundingClientRect(),
       bounds = nativeFrame.getBoundingClientRect()
+    const code = range.startContainer.parentElement?.closest('[data-code-block-content], pre')
+    const codeSelection = node.kind === 'code' || code && body.contains(code) && code.contains(range.endContainer)
+    const language = node.kind === 'code' ? node.language : code?.closest('.md-code-block')
+      ?.querySelector('[data-code-block-banner] [data-text-interaction-exclude]')?.textContent?.trim()
+    let revision = node.revision
+    if (node.kind) {
+      try { revision = (await study.materialDrafts.flush(node)).revision }
+      catch (error) { setError(error.message); return }
+      if (s.isCollapsed || !s.rangeCount || s.getRangeAt(0) !== range || !body.isConnected) return
+    }
     setSelection({
       id: body.dataset.answer,
-      anchor,
+      anchor: node.kind ? { ...anchor, revision } : anchor,
+      materialKind: codeSelection ? 'code' : 'markdown',
+      language: language && /^[\w+#.\-]{1,32}$/.test(language) ? language : undefined,
       range: range.cloneRange(),
       mode: 'actions',
       focus: context,
@@ -692,7 +750,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
         dragHandle: '.st-grip',
         position: positions[n.id],
         selected: n.id === active,
-        style: prefs.dimensions[n.id] ? { ...prefs.dimensions[n.id] } : { ...DEFAULT_CARD_SIZE },
+        style: prefs.dimensions[n.id] ?? DEFAULT_CARD_SIZE,
       })),
     [visibleTurns, children, positions, active, prefs.dimensions],
   )
@@ -739,7 +797,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
               '\n\n'
             : '') +
           (n.anchor ? '> ' + n.anchor.text.replaceAll('\n', '\n> ') + '\n\n' : '') +
-          (study.answerFor(n) || n.error || states[n.status]),
+           (n.kind ? materialMarkdown(n) : study.answerFor(n) || n.error || states[n.status]),
       )
       .join('\n\n---\n\n')
     const url = URL.createObjectURL(new Blob([md], { type: 'text/markdown;charset=utf-8' }))
@@ -765,7 +823,15 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
         pick,
         focus,
         back,
+        newMaterialId,
+        clearMaterialFocus: (id: string) => setNewMaterialId(current => current === id ? null : current),
+        clearSelection: () => setSelection(null),
         setMark: (node, mark) => {
+          if (node.kind) {
+            study.materialDrafts.edit(node, { mark })
+            study.materialDrafts.commit(node)
+            return
+          }
           void study.save({ ...node, mark }).catch(err => setError(err.message))
         },
         toggleFold: (node, direction, collapse) => {
@@ -812,13 +878,13 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
                 </summary>
                 <section onClick={(e) => e.currentTarget.parentElement.removeAttribute('open')}>
                   <button
-                    disabled={path.some((n) => !study.answers.has(n.id))}
+                    disabled={path.some((n) => !n.kind && !study.answers.has(n.id))}
                     onClick={() => download(false)}
                   >
                     导出当前路径
                   </button>
                   <button
-                    disabled={turns.some((n) => !study.answers.has(n.id))}
+                    disabled={turns.some((n) => !n.kind && !study.answers.has(n.id))}
                     onClick={() => download(true)}
                   >
                     导出整棵树
@@ -842,7 +908,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
                   >
                     重命名学习树
                   </button>
-                  <button
+                  {activeNode && !activeNode.kind && <><button
                     onClick={() =>
                       setEditing({ kind: 'question', id: active, text: byId.get(active)?.question })
                     }
@@ -857,7 +923,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
                     }}
                   >
                     {byId.get(active)?.parentId ? '重新回答' : '在新主题中重新回答'}
-                  </button>
+                  </button></>}
                 </section>
               </details>
             )}
@@ -930,6 +996,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
               onArrange={() => autoArrange('visible')}
               onExpandAll={() => autoArrange('all')}
               hiddenCount={turns.length - visibleTurns.length}
+              onAddCard={canAddMaterial ? kind => void openMaterial(kind, activeNode) : undefined}
               focusCurrent={() => {
                 const n = byId.get(active)
                 if (n) focus(n)
@@ -942,8 +1009,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
               }))}
               onBlank={() => {
                 setSelection(null)
-                const menu = root.current?.querySelector('.st-actions')
-                menu?.removeAttribute('open')
+                root.current?.querySelector('.st-actions[open]')?.removeAttribute('open')
               }}
             />
           )}
@@ -1002,6 +1068,7 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
           }}
           onQuote={(event) => capture(event, true)}
         />
+        {materialHistory && <MaterialHistory {...materialHistory} onClose={() => setMaterialHistory(null)} />}
         {selection && selection.mode !== 'added' &&
           createPortal(
             selection.mode !== 'branch' ? <div
@@ -1014,6 +1081,10 @@ export function StudyPage({ study, nativeFrame, nativeSessionKey }) {
             >
               <button type="button" disabled={selection.mode === 'adding'} onClick={addSelection}>添加到对话</button>
               <button type="button" disabled={selection.mode === 'adding'} onClick={() => setSelection(value => ({ ...value, mode: 'branch', y: value.branchY, focus: true }))}>在分支中提问</button>
+              <button type="button" disabled={selection.mode === 'adding' || !nearestTurn(study.nodes, byId.get(selection.id))?.logged} onClick={() => {
+                const source = byId.get(selection.id)
+                if (source) openMaterial(selection.materialKind, source, selection.anchor, selection.language)
+              }}>存为{materialLabel(selection.materialKind)}卡片</button>
             </div> : <div
               className="st-quote-popover"
               role="dialog"

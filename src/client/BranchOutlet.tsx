@@ -1,16 +1,16 @@
 import React from 'react'
 import { Minus, Plus } from 'lucide-react'
 import type { Direction } from './branchFolds'
-import { branchName, type Turn } from './tree'
+import { branchName, type CanvasNode } from './tree'
 
 interface BranchOutletProps {
   direction: Direction
   count: number
-  branches: Turn[]
+  branches: CanvasNode[]
   visible: ReadonlySet<string>
   counts: ReadonlyMap<string, Record<Direction, number>>
   onToggle: (collapse: boolean) => void
-  onRestore: (child: Turn) => void
+  onRestore: (child: CanvasNode) => void
 }
 
 export function BranchOutlet({ direction, count, branches, visible, counts, onToggle, onRestore }: BranchOutletProps) {

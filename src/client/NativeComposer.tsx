@@ -50,13 +50,33 @@ export function NativeComposerSeat({ study, parent, kind = 'card', anchor = null
     study.composers.seats.set(seat, request)
     study.composers.emit()
     return () => { study.composers.seats.delete(seat); study.composers.emit() }
-  }, [study, parent?.id, parent?.endSeq, kind, anchor?.start, anchor?.text, focus])
+  }, [study, parent?.id, parent?.endSeq, kind, anchor?.start, anchor?.text, anchor?.revision, focus])
   return <div ref={ref} className={'st-native-composer nodrag nopan nowheel ' + (kind === 'quote' ? 'simplified' : '')} data-study-composer={kind} />
 }
 
 function NativeComposerPortal({ study, seat, request, SessionProvider, renderSlot }) {
   const [reference, setReference] = useState(null), [error, setError] = useState('')
   const [host] = useState(() => document.createElement('div'))
+  useLayoutEffect(() => {
+    if (request.kind !== 'card' || !request.parent.kind) return
+    const card = seat.closest('.st-card')
+    if (!card) return
+    // Native InputBar focuses itself when its async Session binding arrives.
+    // Keep typing in the source until the user explicitly enters the composer.
+    const events = new AbortController()
+    const stop = () => events.abort()
+    const options = { capture: true, signal: events.signal }
+    host.addEventListener('pointerdown', stop, options)
+    document.addEventListener('keydown', event => { if (event.key === 'Tab') stop() }, options)
+    host.addEventListener('focusin', event => {
+      const previous = event.relatedTarget
+      if (previous instanceof HTMLElement && card.contains(previous) && previous.matches('.cm-content'))
+        queueMicrotask(() => {
+          if (previous.isConnected && host.contains(document.activeElement)) previous.focus({ preventScroll: true })
+        })
+    }, options)
+    return stop
+  }, [host, seat, request])
   useLayoutEffect(() => {
     seat.appendChild(host)
     // DSH focuses its editor on mount. Only an actual editing gesture should
@@ -86,7 +106,8 @@ function NativeComposerPortal({ study, seat, request, SessionProvider, renderSlo
   }, [reference, host, request.focus])
   return createPortal(reference ? <SessionProvider session={reference}>
     {renderSlot(controlSeat(composerBar), { variant: 'composer', occurrence: 'embedded',
-      placeholder: request.kind === 'quote' ? '围绕选中文字继续提问…' : '继续提问…',
+      placeholder: request.kind === 'quote' ? '围绕选中文字继续提问…'
+        : request.parent.kind === 'code' ? '结合这段代码提问…' : request.parent.kind === 'markdown' ? '结合这篇笔记提问…' : '继续提问…',
       studySimplified: request.kind === 'quote', studyAnchor: request.anchor })}
   </SessionProvider> : <div className="st-native-preparing" role={error ? 'alert' : 'status'}>{error || '正在准备输入框…'}</div>, host)
 }
