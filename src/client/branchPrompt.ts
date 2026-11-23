@@ -1,15 +1,33 @@
+import { materialContext } from '../material.js'
+import type { Material, MaterialRef } from './tree'
+
 // The rc.5 composer owns its editor, reference expansion, attachment receipts
 // and settlement. Adapt its per-input send boundary for one mounted tree seat.
 // No shared Session, RPC transport or ordinary composer is modified.
 type Branch = {
   parentSeq: number | null
-  metadata: { studyTree: { id: string; anchor?: unknown; versionOf?: string; branchKind?: 'card' | 'quote' } }
+  metadata: { studyTree: { id: string; anchor?: unknown; versionOf?: string; material?: MaterialRef; branchKind?: 'card' | 'quote' } }
+  material?: Material
   onRequest: (requestId: string) => void
 }
 
 export async function sendBranchPrompt(study, sessionId, session, handle, branch: Branch, content, signal?) {
   const { requestId } = handle
   try {
+    signal?.throwIfAborted()
+    const reference = branch.metadata.studyTree.material
+    if (reference) {
+      let material = branch.material
+      if (material && !branch.metadata.studyTree.anchor && !branch.metadata.studyTree.versionOf) {
+        material = await study.materialDrafts.flush(material)
+        reference.revision = material.revision
+      }
+      if (material?.revision !== reference.revision) material = await study.readMaterial(sessionId, reference)
+      const intro = materialContext(material)
+      const first = content[0]
+      content = first?.type === 'text' ? [{ ...first, text: intro + first.text }, ...content.slice(1)]
+        : [{ type: 'text', text: intro }, ...content]
+    }
     signal?.throwIfAborted()
     await study.call('preparePrompt', { request: {
       sessionId, requestId, parentSeq: branch.parentSeq, metadata: branch.metadata,

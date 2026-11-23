@@ -1,5 +1,5 @@
 import { useMemo, useSyncExternalStore } from 'react'
-import { isQuoteBranch, type Turn } from './tree.ts'
+import { isQuoteBranch, type CanvasNode } from './tree.ts'
 
 export type Direction = 'card' | 'quote'
 type Group = Direction | 'both'
@@ -9,7 +9,7 @@ type Folds = {
   branches: Record<string, boolean>
 }
 
-export const directionOf = (turn: Turn): Direction => isQuoteBranch(turn) ? 'quote' : 'card'
+export const directionOf = (turn: CanvasNode): Direction => isQuoteBranch(turn) ? 'quote' : 'card'
 
 const key = 'dsh-study-tree:folds'
 const changed = 'study-tree-folds'
@@ -46,7 +46,7 @@ function save(folds: Folds) {
   window.dispatchEvent(new Event(changed))
 }
 
-export function setBranchFolds(outlets: Iterable<readonly [string, Group]>, folded: boolean, children: ReadonlyMap<string | null, Turn[]>) {
+export function setBranchFolds(outlets: Iterable<readonly [string, Group]>, folded: boolean, children: ReadonlyMap<string | null, CanvasNode[]>) {
   const folds = readFolds(snapshot())
   let dirty = false
   for (const [id, group] of outlets) {
@@ -69,12 +69,12 @@ export function setBranchFolds(outlets: Iterable<readonly [string, Group]>, fold
   if (dirty) save(folds)
 }
 
-function outletFolded(folds: Folds, node: Turn) {
+function outletFolded(folds: Folds, node: CanvasNode) {
   const group = node.parentId && folds.outlets[node.parentId]
   return group === 'both' || group === directionOf(node)
 }
 
-export function setIndividualFolds(nodes: Iterable<Turn>, folded: boolean) {
+export function setIndividualFolds(nodes: Iterable<CanvasNode>, folded: boolean) {
   const folds = readFolds(snapshot())
   let dirty = false
   for (const node of nodes) {
@@ -88,12 +88,12 @@ export function setIndividualFolds(nodes: Iterable<Turn>, folded: boolean) {
   if (dirty) save(folds)
 }
 
-export function isFolded(folds: Folds, selectedPath: ReadonlySet<string>, node: Turn) {
+export function isFolded(folds: Folds, selectedPath: ReadonlySet<string>, node: CanvasNode) {
   return !selectedPath.has(node.id) && (folds.branches[node.id] ?? outletFolded(folds, node))
 }
 
-export function indexBranches(turns: Turn[]) {
-  const children = new Map<string | null, Turn[]>()
+export function indexBranches(turns: CanvasNode[]) {
+  const children = new Map<string | null, CanvasNode[]>()
   for (const n of turns) {
     const siblings = children.get(n.parentId)
     if (siblings) siblings.push(n)
@@ -115,7 +115,7 @@ export function indexBranches(turns: Turn[]) {
   return { children, counts }
 }
 
-export function visibleBranches(children: Map<string | null, Turn[]>, folds: Folds, path: ReadonlySet<string>) {
+export function visibleBranches(children: Map<string | null, CanvasNode[]>, folds: Folds, path: ReadonlySet<string>) {
   const visible = new Set<string>()
   const pending = [...(children.get(null) || [])]
   while (pending.length) {

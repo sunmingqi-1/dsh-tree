@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { principalOf, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { TreeLog } from '../treeLog.js'
+import { MATERIAL_RECORD } from '../material.js'
 import { nodeMarks } from '../nodeMarks.js'
 import { prepareTreePrompt } from './routing.js'
 
@@ -11,6 +12,7 @@ const anchor = z.object({
   start: z.number().int().nonnegative(),
   prefix: z.string(),
   suffix: z.string(),
+  revision: z.number().int().positive().optional(),
 })
 const node = z.object({
   id,
@@ -33,14 +35,35 @@ const node = z.object({
 })
 const serviceKey = 'studyTree'
 const json = { mode: 'src-json' }
+const materialRef = z.object({ id, revision: z.number().int().positive() })
+const materialRequest = z.object({
+  id: z.string().uuid(),
+  sessionId: z.string().min(1),
+  parentId: id,
+  kind: z.enum(['markdown', 'code']),
+  question: z.string().trim().min(1).max(120),
+  content: z.string().max(64_000),
+  language: z.string().max(32).regex(/^[\w+#.\-]*$/).optional(),
+  revision: z.number().int().nonnegative(),
+  mark: z.enum(Object.keys(nodeMarks)).nullable().optional(),
+  anchor: anchor.nullable(),
+})
 const prompt = z.object({
   sessionId: z.string().min(1),
   requestId: z.string().min(1),
   parentSeq: z.number().int().nonnegative().nullable(),
   metadata: z.object({ studyTree: z.object({ id, anchor: anchor.nullable().optional(), versionOf: id.optional(),
-    branchKind: z.enum(['card', 'quote']).optional() }) }),
+    material: materialRef.optional(), branchKind: z.enum(['card', 'quote']).optional() }) }),
 })
 export const inject = ['storageDomain', 'typert', 'sessionPersistence', 'sessions', 'sessionController', 'remoteAccess']
+
+const liveLogs = new WeakMap()
+function liveLog(session) {
+  let log = liveLogs.get(session)
+  if (!log) liveLogs.set(session, log = new TreeLog(session.id))
+  for (const event of session.snapshotEvents(log.nextSeq)) log.append(event)
+  return log
+}
 
 class StudyTreeRemote extends TypertRemoteService {
   constructor(ctx, rows) {
@@ -70,9 +93,52 @@ class StudyTreeRemote extends TypertRemoteService {
     if ('error' in found) throw found.error
     this.ctx.invocation?.signal?.throwIfAborted()
     this.checkPromptAccess(request)
+    const reference = request.metadata.studyTree.material
+    if (reference) {
+      const log = liveLog(found.agent.session)
+      const material = log.material(reference)
+      const boundary = log.boundaries.get(request.parentSeq)
+      if (!material || !boundary || log.nearestTurn(material)?.id !== boundary.id)
+        throw new Error('资料版本与提问分支不匹配')
+    }
     prepareTreePrompt(this.ctx, found.agent, request)
     await this.ctx.sessions.flush(found.agent.session)
     return { prepared: true }
+  }
+
+  async saveMaterial(input) {
+    const next = materialRequest.parse(input)
+    this.checkPromptAccess(next)
+    const session = this.ctx.sessions.get(next.sessionId)
+    if (!session?.isTree) throw new Error('学习树会话尚未就绪')
+    const log = liveLog(session)
+    const parent = log.nodes.get(next.parentId)
+    const previous = log.nodes.get(next.id)
+    if (!parent || !log.nearestTurn(parent)) throw new Error('资料的父节点不可用')
+    if ((previous?.revision ?? 0) !== next.revision) throw new Error('资料已在其他窗口更新，请重新打开编辑')
+    if (previous && (previous.kind !== next.kind || previous.parentId !== next.parentId))
+      throw new Error('资料卡片的类型或来源发生变化')
+    const saved = {
+      ...next,
+      treeId: log.rootId,
+      created: previous?.created ?? Date.now(),
+      anchor: previous ? previous.anchor : next.anchor,
+      branchKind: 'card',
+      revision: next.revision + 1,
+    }
+    this.ctx.sessions.recordStudyTree(session, MATERIAL_RECORD, saved)
+    await this.ctx.sessions.flush(session)
+    return saved
+  }
+
+  readMaterial(input) {
+    const { sessionId, ...ref } = materialRef.extend({ sessionId: z.string().min(1) }).parse(input)
+    if (principalOf(this.ctx.invocation) && !this.ctx.remoteAccess.allows({ kind: 'session', id: sessionId }))
+      throw new RemoteError('remote-access/denied', '无权读取此会话')
+    const session = this.ctx.sessions.get(sessionId)
+    const material = session?.isTree && liveLog(session).material(ref)
+    if (!material) throw new Error('提问时的资料版本不可用')
+    return material
   }
 
   async list() {
@@ -134,7 +200,7 @@ export async function apply(ctx) {
       for (const { log } of logs.values()) {
         for (const row of log.nodes.values()) {
           const local = table.get(row.id)
-          result.set(row.id, { ...row, revision: local?.revision ?? 0, title: local?.title, mark: local?.mark })
+          result.set(row.id, row.kind ? row : { ...row, revision: local?.revision ?? 0, title: local?.title, mark: local?.mark })
         }
       }
       return [...result.values()]
@@ -180,7 +246,7 @@ export async function apply(ctx) {
     face: 'host',
     schemas: [],
     model: { services: [], events: [], objects: [] },
-    invocations: ['list', 'save', 'preparePrompt'].map((method) => ({
+    invocations: ['list', 'save', 'preparePrompt', 'saveMaterial', 'readMaterial'].map((method) => ({
       id: 'dsh-study-tree#studyTree/' + method,
       service: serviceKey,
       namespace: serviceKey,

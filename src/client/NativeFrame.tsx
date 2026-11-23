@@ -133,7 +133,7 @@ export function installPathReader(ctx, study) {
     function PathReader() {
       useStudy(study)
       return <div className="st-path-reader">
-        {pathTo(study.nodes, study.active).map(node => (
+        {pathTo(study.nodes, study.active).filter(node => !node.kind).map(node => (
           <NativeTurnSeat key={node.id} study={study} node={node} reader>
             <p>{node.question}</p>
           </NativeTurnSeat>

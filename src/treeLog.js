@@ -1,6 +1,9 @@
-/** Fold the durable tree log once in global sequence order. Keep only card metadata. */
+import { MATERIAL_RECORD, materialContext } from './material.js'
+
+/** Fold the durable tree log once in global sequence order. */
 export class TreeLog {
   nodes = new Map()
+  materials = new Map()
   boundaries = new Map()
   nextSeq = 0
   marked = false
@@ -19,7 +22,13 @@ export class TreeLog {
     this.nextSeq = seq + 1
     if (type === 'session/tree' || (type === 'plugin:study-tree/tree' && event.ignorable === true)) this.marked = true
     if (!this.marked) return
-    if (type === 'agent/inbox/spliced' && data.target === 'next-turn') {
+    if (type === MATERIAL_RECORD && event.ignorable === true) {
+      let versions = this.materials.get(data.id)
+      if (!versions) this.materials.set(data.id, versions = new Map())
+      versions.set(data.revision, data)
+      this.nodes.set(data.id, data)
+      return data
+    } else if (type === 'agent/inbox/spliced' && data.target === 'next-turn') {
       this.queued.splice(data.start, data.removedCount || 0, ...data.inserted)
     } else if (type === 'turn/start') {
       this.idleCompaction = null
@@ -76,6 +85,13 @@ export class TreeLog {
     }
   }
 
+  material(ref) { return ref && this.materials.get(ref.id)?.get(ref.revision) }
+
+  nearestTurn(node) {
+    while (node?.kind) node = this.nodes.get(node.parentId)
+    return node
+  }
+
   addQuestion(data) {
     const start = this.opening.data
     const source = data.source
@@ -85,10 +101,17 @@ export class TreeLog {
     if (!parent && this.rootId !== null) return
     const id = typeof meta.id === 'string' ? meta.id : this.sessionId + '/' + start.turn
     this.rootId ??= id
-    const text = data.content.filter(part => part.type === 'text').map(part => part.text).join('\n')
+    const material = this.material(meta.material)
+    const sourceCard = material && this.nearestTurn(material)?.id === parent?.id ? material : null
+    let text = data.content.filter(part => part.type === 'text').map(part => part.text).join('\n')
+    if (sourceCard) {
+      const context = materialContext(sourceCard)
+      if (text.startsWith(context)) text = text.slice(context.length)
+    }
     const { question, anchor } = nativeQuestion(text, meta.anchor)
     this.current = {
-      id, treeId: this.rootId, parentId: parent?.id || null, question, anchor,
+      id, treeId: this.rootId, parentId: sourceCard?.id || parent?.id || null, question, anchor,
+      ...(sourceCard && { material: meta.material }),
       ...(parent && (meta.branchKind === 'quote' || meta.branchKind === 'card') && { branchKind: meta.branchKind }),
       created: this.opening.time, sessionId: this.sessionId, requestId: source.rpcId,
       endSeq: null, boundarySeq: null, status: 'sending', error: null, revision: 0,

@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { TreeLog } from '../src/treeLog.js'
 import { apply } from '../src/host/index.js'
+import { MATERIAL_RECORD, materialContext } from '../src/material.js'
 
 const source = id => ({ kind: 'user', rpcId: 'ask-' + id })
 const root = crypto.randomUUID(), b = crypto.randomUUID(), c = crypto.randomUUID(), d = crypto.randomUUID()
@@ -99,6 +100,36 @@ test('宿主后台轮的独立压缩不能改写可见父卡片的边界', () =>
   assert.equal(log.nodes.get(d).boundarySeq, original)
 })
 import { pathTo, readTurn } from '../src/client/tree.ts'
+
+test('资料卡的版本重放独立于回合边界，问答通过资料连线仍继承正确的历史', () => {
+  const { events, endB } = scenario()
+  const note = crypto.randomUUID(), question = crypto.randomUUID()
+  const material = {
+    id: note, parentId: b, treeId: root, sessionId: 'session', kind: 'markdown', question: '笔记',
+    content: '第一次保存', revision: 1, anchor: null, branchKind: 'card',
+  }
+  const add = (type, data, ignorable) => events.push({ type, data, seq: events.length, ignorable }) - 1
+  add(MATERIAL_RECORD, material, true)
+  add(MATERIAL_RECORD, { ...material, content: '更正后的笔记', revision: 2 }, true)
+  add('turn/start', { turn: 5, parentSeq: endB, requestId: 'material-question', metadata: {
+    studyTree: { id: question, material: { id: note, revision: 1 }, anchor },
+  } })
+  add('user/message', { source: { kind: 'user', rpcId: 'material-question' }, content: [
+    { type: 'text', text: materialContext(material) + '> 这一句\n\n这个推导对吗？' },
+  ] })
+  add('turn/end', { turn: 5, reason: { kind: 'completed' } })
+  add('turn/start', { turn: 6, parentSeq: endB })
+  add('turn/end', { turn: 6, reason: { kind: 'completed' } })
+  const log = new TreeLog('session')
+  for (const event of events) log.append(event)
+  assert.equal(log.nodes.get(note).content, '更正后的笔记')
+  assert.deepEqual(log.material(log.nodes.get(question).material), material)
+  assert.equal(log.nodes.get(question).question, '这个推导对吗？')
+  const path = pathTo([...log.nodes.values()], question)
+  assert.deepEqual(path.map(node => node.id), [root, b, note, question])
+  assert.deepEqual(path[1].activeTurns, [2])
+  assert.deepEqual(log.nodes.get(b).activeTurns, [2, 6])
+})
 
 test('带明确父边界的宿主续轮归原卡，历史子节点保持当时继承的原生轮次', () => {
   const { events, endB } = scenario()

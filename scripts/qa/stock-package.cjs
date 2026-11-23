@@ -127,7 +127,7 @@ async function main() {
     run(process.execPath, [path.join(__dirname, 'stock-restart.cjs'), 'restore'], childEnv)
     fs.writeFileSync(childEnv.DSH_QA_READ_FIXTURE, 'stock tool read\n')
     for (const test of ['native-views', 'native-turns', 'native-reload', 'native-questions',
-      'native-approvals', 'selection-navigation', 'workspace-selection']) {
+      'native-approvals', 'selection-navigation', 'workspace-selection', 'material-cards']) {
       run(process.execPath, [path.join(__dirname, test + '.cjs')], childEnv)
     }
     const url = new URL(fs.readFileSync(childEnv.DSH_QA_LOG, 'utf8').match(/http:\/\/\S+/)[0])

@@ -1,4 +1,5 @@
 import type { Anchor } from './tree'
+import { EditorView } from '@codemirror/view'
 
 // Native status/tool controls are siblings of the answer. Anchor offsets use
 // only selectable Assistant Markdown, so expanding tools never moves a quote.
@@ -19,6 +20,14 @@ function answerNodes(body: HTMLElement): Text[] {
 
 export function selectionAt(body: HTMLElement, range: Range): Anchor | null {
   if (range.collapsed || !body.contains(range.commonAncestorContainer)) return null
+  const editor = body.classList.contains('cm-content') && EditorView.findFromDOM(body)
+  if (editor) {
+    const start = editor.posAtDOM(range.startContainer, range.startOffset)
+    const end = editor.posAtDOM(range.endContainer, range.endOffset)
+    const doc = editor.state.doc, text = doc.sliceString(start, end)
+    return text.trim() ? { start, text, prefix: doc.sliceString(Math.max(0, start - 32), start),
+      suffix: doc.sliceString(end, Math.min(doc.length, end + 32)) } : null
+  }
   const nodes = answerNodes(body)
   if (!nodes.some(node => node === range.startContainer || range.startContainer.contains(node)) ||
       !nodes.some(node => node === range.endContainer || range.endContainer.contains(node))) return null
@@ -44,6 +53,14 @@ export function selectionAt(body: HTMLElement, range: Range): Anchor | null {
 }
 
 export function locate(body: HTMLElement, anchor: Anchor) {
+  const editor = body.classList.contains('cm-content') && EditorView.findFromDOM(body)
+  if (editor) {
+    const end = anchor.start + anchor.text.length
+    if (end > editor.state.doc.length || editor.state.doc.sliceString(anchor.start, end) !== anchor.text) return false
+    editor.dispatch({ selection: { anchor: anchor.start, head: end }, effects: EditorView.scrollIntoView(anchor.start, { y: 'center' }) })
+    editor.focus()
+    return true
+  }
   const nodes = answerNodes(body)
   const text = nodes.map(node => node.textContent).join('')
   let offset = anchor.start

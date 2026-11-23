@@ -1,4 +1,4 @@
-import type { Anchor, Turn } from './tree'
+import { nearestTurn, type Anchor, type CanvasNode } from './tree'
 import { bindBranchInput } from './branchPrompt'
 export { quoteText, nativeQuestion } from '../treeLog.js'
 
@@ -25,7 +25,7 @@ export class NativeDrafts {
   getSnapshot = () => this.version
   emit() { this.version++; for (const listener of this.listeners) listener() }
 
-  async addToCard(parent: Turn, anchor: Anchor) {
+  async addToCard(parent: CanvasNode, anchor: Anchor) {
     if (this.editor?.parentId === parent.id && this.editor.kind === 'card')
       this.editor.insert(anchor)
     else this.deferredQuotes.set(parent.id, anchor)
@@ -33,11 +33,12 @@ export class NativeDrafts {
 
   mount(request, ready, failed) {
     const { parent, kind, anchor } = request
-    if (!parent.logged || parent.endSeq == null) {
-      failed(parent.logged ? '请等待来源回答结束' : '旧版学习树仅支持阅读。请新建学习主题继续。')
+    const origin = nearestTurn(this.study.nodes, parent)
+    if (!origin?.logged || origin.endSeq == null) {
+      failed(origin?.logged ? '请等待来源回答结束' : '该分支的原生会话不可用')
       return () => {}
     }
-    const key = JSON.stringify([parent.id, kind, anchor?.start, anchor?.text])
+    const key = JSON.stringify([parent.id, kind, anchor?.start, anchor?.text, ...(anchor?.revision ? [anchor.revision] : [])])
     const ref = this.study.ctx.sessions.retain(parent.sessionId, { source: 'studyTree.input' })
     let alive = true, released = false, off = () => {}, unbind = () => {}, input, editor
     const release = () => {
@@ -101,8 +102,12 @@ export class NativeDrafts {
         unbind = bindBranchInput(this.study, binding, parent.sessionId, () => {
           const current = this.study.nodes.find(n => n.id === parent.id) || parent
           const id = crypto.randomUUID()
-          return { parentSeq: current.boundarySeq ?? current.endSeq,
-            metadata: { studyTree: { id, branchKind: kind, ...(source && { anchor: source }) } },
+          const context = nearestTurn(this.study.nodes, current) ?? origin
+          const material = current.kind ? current : undefined
+          const reference = material && { id: material.id, revision: source?.revision ?? material.revision }
+          return { parentSeq: context.boundarySeq ?? context.endSeq,
+            metadata: { studyTree: { id, branchKind: kind, ...(source && { anchor: source }), ...(reference && { material: reference }) } },
+            material,
             onRequest: this.study.onSubmission(id),
           }
         })
