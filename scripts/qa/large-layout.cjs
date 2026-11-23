@@ -41,6 +41,22 @@ async function run() {
     await page.waitForFunction(n => document.querySelectorAll('.st-card .st-native-turn').length < n / 2, total)
     const sample = await read()
     assert.equal(sample.cards, total)
+    const header = active.locator('.st-card-head')
+    await header.hover({ position: { x: 5, y: 3 } })
+    await page.mouse.wheel(0, -500)
+    await page.waitForFunction(() => {
+      const head = document.querySelector('.st-card.active .st-card-head')
+      const viewport = head.closest('.react-flow__viewport')
+      const scale = new DOMMatrixReadOnly(getComputedStyle(viewport).transform).a
+      return scale > 1.1 && Math.abs(Number(getComputedStyle(head).zoom) - scale) < 0.001
+    })
+    const magnified = await page.locator('.st-card-head[style*="--st-header-scale"]').count()
+    assert.ok(magnified < total, '放大只应调整视野内的标题')
+    await page.getByRole('button', { name: '定位当前节点', exact: true }).click()
+    await page.waitForFunction(() => {
+      const head = document.querySelector('.st-card.active .st-card-head')
+      return Number(getComputedStyle(head).zoom) === 1
+    })
     async function drag(dx, dy, steps) {
       const grip = active.locator('.st-kind')
       await grip.hover()

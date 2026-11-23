@@ -39,10 +39,24 @@ export function ViewportAnswer({ defer, children }: { defer: boolean; children: 
   useLayoutEffect(() => {
     const card = slot.current?.closest<HTMLElement>('.st-card')
     if (!defer || !card) return
-    return watch(card, visible => {
-      if (!visible && slot.current) height.current = slot.current.offsetHeight
-      setNear(visible)
+    // Reuse a recently visible editor or native turn when the wheel reverses
+    // across the preload boundary. First-time entry is still immediate.
+    let eviction: ReturnType<typeof setTimeout> | undefined
+    let retained = false
+    const unwatch = watch(card, visible => {
+      clearTimeout(eviction)
+      if (visible) {
+        retained = true
+        setNear(true)
+      } else if (retained) {
+        eviction = setTimeout(() => {
+          if (slot.current) height.current = slot.current.offsetHeight
+          retained = false
+          setNear(false)
+        }, 1200)
+      } else setNear(false)
     })
+    return () => { clearTimeout(eviction); unwatch?.() }
   }, [defer])
   const mounted = !defer || near
   return <div ref={slot} style={mounted ? undefined : { height: height.current }}>{mounted && children}</div>

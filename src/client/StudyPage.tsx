@@ -24,7 +24,6 @@ import {
   Handle,
   Position,
   NodeResizer,
-  useStoreApi,
   type ReactFlowInstance,
   type Viewport,
 } from '@xyflow/react'
@@ -46,7 +45,7 @@ import { NativeComposerSeat } from './NativeComposer'
 import { CanvasTools } from './CanvasTools'
 import { CanvasMiniMap } from './CanvasMiniMap'
 import { ViewportAnswer } from './ViewportAnswer'
-import { rasterPolicy, headerRasterScale } from './raster'
+import { rasterPolicy, visibleHeaderRaster } from './raster'
 import { bindRightPan } from './rightPan'
 import { NativeTurnSeat } from './NativeTurn'
 import { useNodePending, NativeInteractionSeat, RunningStatus } from './NativeInteraction'
@@ -107,7 +106,6 @@ function Card({ data, resizing: nodeResizing }) {
   const customSize = ui.prefs.dimensions[n.id]
   const card = useRef<HTMLElement>(null)
   const header = useRef<HTMLElement>(null)
-  const flowStore = useStoreApi()
   const focusMaterial = n.kind && ui.newMaterialId === n.id
   useLayoutEffect(() => {
     if (focusMaterial) ui.clearMaterialFocus(n.id)
@@ -140,11 +138,14 @@ function Card({ data, resizing: nodeResizing }) {
   }, [n.id, ui.measure])
   useLayoutEffect(() => {
     if (!header.current || !card.current) return
-    headerRasterScale(header.current, flowStore.getState().transform[2])
-    const observer = new ResizeObserver(() => card.current?.style.setProperty('--st-head-space', header.current.offsetHeight + 16 + 'px'))
+    const unwatch = interaction.headerRaster.observe(header.current)
+    const observer = new ResizeObserver(([entry]) => {
+      const height = entry.borderBoxSize[0].blockSize
+      card.current?.style.setProperty('--st-head-space', height + 16 + 'px')
+    })
     observer.observe(header.current)
-    return () => observer.disconnect()
-  }, [flowStore])
+    return () => { observer.disconnect(); unwatch() }
+  }, [interaction.headerRaster])
   return (
     <article
       ref={card}
@@ -288,7 +289,8 @@ function Canvas({
   onAddCard,
 }) {
   const { display, onNodesChange, begin, finish } = useAdaptiveNodes(nodes, onCommit, interacting)
-  const interaction = React.useMemo(() => ({ begin, finish }), [begin, finish])
+  const [headerRaster] = useState(() => visibleHeaderRaster(view.zoom))
+  const interaction = React.useMemo(() => ({ begin, finish, headerRaster }), [begin, finish, headerRaster])
   const canvas = useRef<HTMLDivElement>(null), layer = useRef<HTMLElement>(null)
   const camera = useRef<ReactFlowInstance | null>(null)
   const rightDragging = useRef(false)
@@ -299,10 +301,7 @@ function Canvas({
   if (!raster.current) raster.current = rasterPolicy(() => {
     if (!layer.current?.isConnected) layer.current = canvas.current?.querySelector('.react-flow__viewport') || null
     return layer.current
-  }, view.zoom, zoom => {
-    for (const header of layer.current?.querySelectorAll<HTMLElement>('.st-card-head') || [])
-      headerRasterScale(header, zoom)
-  })
+  }, view.zoom, headerRaster.settle)
   const settleView = (view: Viewport) => {
     raster.current.end(view)
     const last = lastSavedView.current

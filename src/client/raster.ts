@@ -31,11 +31,50 @@ export function rasterPolicy(layer: () => HTMLElement | null, initialZoom: numbe
   }
 }
 
-// Lay out small floating headers at their displayed pixel size, then cancel
-// the viewport's transform scale locally. Keep this out of intermediate frames.
-export function headerRasterScale(element: HTMLElement | null, zoom: number) {
-  if (!element || !Number.isFinite(zoom) || zoom <= 0) return
-  const value = String(zoom)
-  if (element.style.getPropertyValue('--st-header-scale') !== value)
-    element.style.setProperty('--st-header-scale', value)
+// Downsampling a normal-size title needs no extra layout. When magnified, only
+// titles on screen need the exact settled density. Panning one back into view
+// applies the latest density even if the camera hasn't zoomed again.
+export function visibleHeaderRaster(initialZoom: number) {
+  // Reversing wheel steps can return 1 + floating point noise at 100%.
+  const density = (zoom: number) => zoom <= 1 + 1e-6 ? 1 : zoom
+  let scale = density(initialZoom)
+  let observer: IntersectionObserver | undefined
+  const observed = new Set<HTMLElement>()
+  const visible = new Set<HTMLElement>()
+  const refresh = (header: HTMLElement) => {
+    const value = scale === 1 ? '' : String(scale)
+    if (header.style.getPropertyValue('--st-header-scale') !== value)
+      header.style.setProperty('--st-header-scale', value)
+  }
+  return {
+    observe(header: HTMLElement) {
+      observer ??= new IntersectionObserver(entries => {
+        for (const entry of entries) {
+          const element = entry.target as HTMLElement
+          if (!observed.has(element)) continue
+          if (entry.isIntersecting) {
+            visible.add(element)
+            refresh(element)
+          } else visible.delete(element)
+        }
+      }, { root: header.closest('.react-flow') })
+      observed.add(header)
+      observer.observe(header)
+      return () => {
+        observed.delete(header)
+        visible.delete(header)
+        observer?.unobserve(header)
+        if (!observed.size) {
+          observer?.disconnect()
+          observer = undefined
+        }
+      }
+    },
+    settle(zoom: number) {
+      const next = density(zoom)
+      if (next === scale) return
+      scale = next
+      visible.forEach(refresh)
+    },
+  }
 }

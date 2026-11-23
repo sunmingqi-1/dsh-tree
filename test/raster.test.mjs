@@ -1,6 +1,54 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { rasterPolicy } from '../src/client/raster.ts'
+import { rasterPolicy, visibleHeaderRaster } from '../src/client/raster.ts'
+
+test('只补偿可见且放大的标题，平移进入视野和卸载时同步观察状态', t => {
+  let notify, disconnected = false
+  const targets = new Set()
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'IntersectionObserver')
+  globalThis.IntersectionObserver = class {
+    constructor(callback) { notify = callback }
+    observe(header) { targets.add(header) }
+    unobserve(header) { targets.delete(header) }
+    disconnect() { disconnected = true }
+  }
+  t.after(() => {
+    if (descriptor) Object.defineProperty(globalThis, 'IntersectionObserver', descriptor)
+    else delete globalThis.IntersectionObserver
+  })
+  function header() {
+    const writes = []
+    return { writes, closest: () => null, style: {
+      getPropertyValue: () => writes.at(-1) ?? '',
+      setProperty: (_, value) => writes.push(value),
+    } }
+  }
+  const raster = visibleHeaderRaster(0.4)
+  const a = header(), b = header()
+  const removeA = raster.observe(a), removeB = raster.observe(b)
+  const visibility = (target, isIntersecting) => notify([{ target, isIntersecting }])
+  visibility(a, true)
+  raster.settle(1 + Number.EPSILON)
+  assert.deepEqual(a.writes, [])
+  raster.settle(1.65)
+  assert.deepEqual(a.writes, ['1.65'])
+  assert.deepEqual(b.writes, [])
+  visibility(a, false)
+  visibility(b, true)
+  assert.deepEqual(b.writes, ['1.65'])
+  raster.settle(0.6)
+  assert.deepEqual(b.writes, ['1.65', ''])
+  assert.deepEqual(a.writes, ['1.65'])
+  visibility(a, true)
+  assert.deepEqual(a.writes, ['1.65', ''])
+  removeA()
+  visibility(a, true)
+  raster.settle(1.4)
+  assert.deepEqual(a.writes, ['1.65', ''])
+  removeB()
+  assert.equal(targets.size, 0)
+  assert.equal(disconnected, true)
+})
 
 test('平移复用绘制层，100 次平移更新不重复切换样式', () => {
   let value = 'auto', writes = 0
