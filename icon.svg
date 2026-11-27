@@ -1,1 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="#30353b"/><path d="M18 32h9c8 0 7-15 17-15m-17 15c8 0 7 15 17 15" fill="none" stroke="#cad9d0" stroke-width="3"/><g fill="#fff"><circle cx="17" cy="32" r="6"/><circle cx="46" cy="17" r="5"/><circle cx="46" cy="47" r="5"/></g></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="tile" x2="1" y2="1">
+      <stop stop-color="#253b83"/>
+      <stop offset="1" stop-color="#131b3c"/>
+    </linearGradient>
+    <linearGradient id="branch" x2="1" y2="1">
+      <stop stop-color="#f1f5ff"/>
+      <stop offset="1" stop-color="#88abff"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="17" fill="url(#tile)"/>
+  <rect x="2.5" y="2.5" width="59" height="59" rx="16.5" fill="none" stroke="#9ab3ff" stroke-opacity=".35"/>
+  <path d="M32 44V33m0 0c0-5-2-7-6-9l-8-4m14 13c0-5 2-7 6-9l8-4" fill="none" stroke="url(#branch)" stroke-linecap="round" stroke-width="3.5"/>
+  <rect x="26" y="40" width="12" height="12" rx="4" fill="#8aaeff"/>
+  <rect x="12" y="14" width="12" height="12" rx="4" fill="#f2f5ff"/>
+  <rect x="40" y="14" width="12" height="12" rx="4" fill="#a9eddb"/>
+</svg>
